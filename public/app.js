@@ -11,6 +11,8 @@ import {
   roomFromLocation,
   shareUrl,
   loadShareOrigin,
+  snapshotFiles,
+  filesFromDataTransfer,
 } from "./js/utils.js";
 import { loadKeyPair, exportPublicKey } from "./js/crypto.js";
 import { Signaling } from "./js/signaling.js";
@@ -155,13 +157,20 @@ function renderTransfers() {
       if (act === "resume") engine.resume(id);
       if (act === "cancel") engine.cancel(id);
       if (act === "reject") engine.reject(id);
+      if (act === "save") engine.saveFile(id, btn.dataset.file);
     });
   }
 }
 
+function filePct(tx, file) {
+  if (file.done || tx.status === "completed") return 100;
+  const set = tx.direction === "send" ? tx.acked?.get(file.id) : tx.received?.get(file.id);
+  if (!file.totalChunks) return 0;
+  return Math.min(100, Math.round(((set?.size || 0) / file.totalChunks) * 100));
+}
+
 function transferCard(tx) {
   const pct = tx.totalBytes ? Math.min(100, Math.round((tx.bytes / tx.totalBytes) * 100)) : 0;
-  const names = tx.files.map((f) => f.name).join(", ");
   const dir = tx.direction === "send" ? "Sending" : "Receiving";
   const actions = actionsFor(tx);
   const label =
@@ -178,16 +187,30 @@ function transferCard(tx) {
               : tx.status === "cancelled"
                 ? "Cancelled"
                 : `${pct}%`;
+  const fileRows = tx.files
+    .map((file) => {
+      const fp = filePct(tx, file);
+      const save =
+        file.blob && tx.direction === "receive"
+          ? `<button class="text-btn" data-act="save" data-id="${tx.id}" data-file="${file.id}">Save</button>`
+          : "";
+      return `<li class="tx-file">
+        <span class="tx-file-name">${escapeHtml(file.name)}</span>
+        <span class="tx-file-meta">${formatBytes(file.size)} · ${file.done || tx.status === "completed" ? "Done" : `${fp}%`}${save}</span>
+      </li>`;
+    })
+    .join("");
   return `
     <article class="tx status-${tx.status}">
       <div class="tx-top">
         <div>
-          <div class="tx-name">${escapeHtml(names)}</div>
+          <div class="tx-name">${tx.files.length} file${tx.files.length === 1 ? "" : "s"}</div>
           <div class="tx-sub">${dir} · ${formatBytes(tx.totalBytes)}</div>
         </div>
         <div class="tx-pct">${label}</div>
       </div>
       <div class="bar"><i style="width:${tx.status === "completed" ? 100 : pct}%"></i></div>
+      <ul class="tx-files">${fileRows}</ul>
       ${actions ? `<div class="tx-foot"><span class="tx-actions">${actions}</span></div>` : ""}
       ${tx.error ? `<div class="tx-error">${escapeHtml(tx.error)}</div>` : ""}
     </article>
@@ -217,12 +240,14 @@ function renderIncoming(items) {
   els.incoming.hidden = false;
   els.incoming.innerHTML = items
     .map((tx) => {
-      const names = tx.files.map((f) => `${escapeHtml(f.name)} (${formatBytes(f.size)})`).join(", ");
+      const names = tx.files
+        .map((f) => `<li>${escapeHtml(f.name)} · ${formatBytes(f.size)}</li>`)
+        .join("");
       return `
         <div class="incoming-card">
           <div>
-            <strong>${escapeHtml(tx.peerName)}</strong> wants to send
-            <div class="incoming-files">${names}</div>
+            <strong>${escapeHtml(shortName(tx.peerName))}</strong> wants to send ${tx.files.length} file${tx.files.length === 1 ? "" : "s"}
+            <ul class="incoming-files">${names}</ul>
           </div>
           <div class="incoming-actions">
             <button class="btn ghost" data-act="reject" data-id="${tx.id}">Decline</button>
@@ -437,8 +462,9 @@ function wireEvents() {
   });
   on(els.pickFiles, "click", () => els.fileInput.click());
   on(els.fileInput, "change", () => {
-    sendPicked([...els.fileInput.files]);
+    const files = snapshotFiles(els.fileInput.files);
     els.fileInput.value = "";
+    sendPicked(files);
   });
   on(els.drop, "click", (e) => {
     if (e.target.closest("button, select, a")) return;
@@ -452,11 +478,11 @@ function wireEvents() {
   on(els.drop, "drop", (e) => {
     e.preventDefault();
     els.drop.classList.remove("over");
-    sendPicked([...e.dataTransfer.files]);
+    sendPicked(filesFromDataTransfer(e.dataTransfer));
   });
   on(document, "paste", (e) => {
     if (state.view !== "room") return;
-    const files = [...(e.clipboardData?.files || [])];
+    const files = snapshotFiles(e.clipboardData?.files || []);
     if (files.length) sendPicked(files);
   });
   on(document, "keydown", (e) => {

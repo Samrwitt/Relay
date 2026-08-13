@@ -6,6 +6,8 @@ import {
   rangesFromSet,
   setFromRanges,
   downloadBlob,
+  snapshotFiles,
+  sleep,
 } from "./utils.js";
 import { encryptChunk, decryptChunk } from "./crypto.js";
 import * as idb from "./idb.js";
@@ -45,7 +47,7 @@ export class TransferEngine {
   }
 
   async sendFiles(fileList, targetIds) {
-    const files = [...fileList];
+    const files = snapshotFiles(fileList);
     if (!files.length || !targetIds.length) return [];
 
     const created = [];
@@ -414,11 +416,19 @@ export class TransferEngine {
     }
   }
 
+  saveFile(transferId, fileId) {
+    const tx = this.transfers.get(transferId);
+    const file = tx?.files.find((f) => f.id === fileId);
+    if (file?.blob) downloadBlob(file.blob, file.name);
+  }
+
   async finishFile(tx, file) {
     try {
       const blob = await idb.assembleBlob(tx.id, file.id, file.totalChunks, file.type);
       file.blob = blob;
       file.done = true;
+      downloadBlob(blob, file.name);
+      await sleep(400);
       if (tx.files.every((f) => f.done)) await this.completeReceive(tx);
     } catch (err) {
       tx.error = err.message;
@@ -429,9 +439,6 @@ export class TransferEngine {
   async completeReceive(tx) {
     tx.status = "completed";
     tx.finishedAt = Date.now();
-    for (const file of tx.files) {
-      if (file.blob) downloadBlob(file.blob, file.name);
-    }
     await idb.historyAdd({
       id: tx.id,
       direction: "received",

@@ -217,3 +217,26 @@ export function on(el, ev, fn, opts) {
   el.addEventListener(ev, fn, opts);
   return () => el.removeEventListener(ev, fn, opts);
 }
+
+export function snapshotFiles(list) {
+  return [...(list || [])]
+    .filter((file) => file && typeof file.size === "number")
+    .map(
+      (file) =>
+        new File([file.slice(0, file.size, file.type || "")], file.name, {
+          type: file.type,
+          lastModified: file.lastModified,
+        })
+    );
+}
+
+export function filesFromDataTransfer(dt) {
+  const fromItems = [];
+  for (const item of dt.items || []) {
+    if (item.kind === "file") {
+      const file = item.getAsFile();
+      if (file) fromItems.push(file);
+    }
+  }
+  return snapshotFiles(fromItems.length ? fromItems : dt.files);
+}

@@ -233,7 +233,33 @@ a { color: inherit; }
   background: var(--green-soft);
   border: 1px solid #b7dcc4;
 }
-.incoming-files { color: var(--muted); font-size: 0.92rem; }
+.incoming-files {
+  color: var(--muted);
+  font-size: 0.92rem;
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.tx-files {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.tx-file {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.88rem;
+}
+.tx-file-name { word-break: break-all; }
+.tx-file-meta {
+  color: var(--muted);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .incoming-actions { display: flex; gap: 8px; }
 
 .transfers { display: grid; gap: 10px; margin-top: 14px; }
