@@ -5,17 +5,14 @@ import {
   detectDevice,
   deviceId,
   formatBytes,
-  formatEta,
-  formatRate,
   formatTime,
-  hueFromId,
   initials,
   on,
   roomFromLocation,
   shareUrl,
   loadShareOrigin,
 } from "./js/utils.js";
-import { loadKeyPair, exportPublicKey, fingerprint } from "./js/crypto.js";
+import { loadKeyPair, exportPublicKey } from "./js/crypto.js";
 import { Signaling } from "./js/signaling.js";
 import { Mesh } from "./js/webrtc.js";
 import { TransferEngine } from "./js/transfer.js";
@@ -71,6 +68,9 @@ const els = {
   statusDot: $("#status-dot"),
   peerCount: $("#peer-count"),
   lanHint: $("#lan-hint"),
+  waiting: $("#waiting"),
+  ready: $("#ready"),
+  qrInline: $("#qr-inline"),
 };
 
 function roomCode() {
@@ -96,55 +96,41 @@ function setView(view) {
 
 function renderPeers() {
   const peers = state.peers;
+  const connected = peers.length > 0;
   els.peerCount.textContent = String(peers.length + (state.you ? 1 : 0));
-  els.devices.innerHTML = "";
+  if (els.waiting) els.waiting.hidden = connected;
+  if (els.ready) els.ready.hidden = !connected;
+  if (els.openQr) els.openQr.hidden = !connected;
 
+  els.devices.innerHTML = "";
   const all = state.you ? [state.you, ...peers] : peers;
-  if (!all.length) {
-    els.devices.innerHTML = `<p class="empty-transfers">Connecting…</p>`;
-  }
   for (const peer of all) {
     const mine = peer.id === state.you?.id;
-    const mode = mine ? "you" : mesh?.modeOf(peer.id) || "connecting";
-    const fp = !mine && peer.publicKey ? fingerprint(keys, peer.publicKey) : "";
-    const hue = hueFromId(peer.id);
     const card = document.createElement("article");
     card.className = `device ${mine ? "is-you" : ""}`;
     card.innerHTML = `
-      <div class="avatar" style="--h:${hue}">${initials(peer.name)}</div>
-      <div class="device-meta">
-        <div class="device-name">${escapeHtml(peer.name)}${mine ? " <span>you</span>" : ""}</div>
-        <div class="device-sub">${escapeHtml(peer.platform || "")}${fp ? ` · verify ${fp}` : ""}</div>
-      </div>
-      <div class="mode-pill mode-${mode}">${modeLabel(mode)}</div>
+      <div class="avatar">${initials(peer.name)}</div>
+      <div class="device-name">${escapeHtml(shortName(peer.name))}${mine ? " <span>you</span>" : ""}</div>
     `;
     els.devices.appendChild(card);
-  }
-  if (state.you && !peers.length) {
-    const hint = document.createElement("p");
-    hint.className = "empty-transfers";
-    hint.textContent = "Scan the QR or share the link to add a phone or another browser.";
-    els.devices.appendChild(hint);
   }
 
   const select = els.target;
   const prev = select.value || state.target;
-  select.innerHTML = `<option value="*">Everyone in the room</option>`;
+  select.innerHTML = `<option value="*">Everyone</option>`;
   for (const peer of peers) {
     const opt = document.createElement("option");
     opt.value = peer.id;
-    opt.textContent = peer.name;
+    opt.textContent = shortName(peer.name);
     select.appendChild(opt);
   }
+  select.hidden = peers.length < 2;
   select.value = [...select.options].some((o) => o.value === prev) ? prev : "*";
   state.target = select.value;
 }
 
-function modeLabel(mode) {
-  if (mode === "p2p") return "P2P";
-  if (mode === "relay") return "Relay";
-  if (mode === "you") return "This device";
-  return "Linking";
+function shortName(name) {
+  return String(name || "Device").replace(/\s*·\s*.+$/, "");
 }
 
 function escapeHtml(s) {
@@ -157,15 +143,8 @@ function escapeHtml(s) {
 
 function renderTransfers() {
   const items = engine?.list() || [];
-  if (!items.length) {
-    els.transfers.innerHTML = `<p class="empty-transfers">Transfers will show up here. Drop a file to start.</p>`;
-    renderIncoming([]);
-    return;
-  }
-  els.transfers.innerHTML = items
-    .filter((t) => t.status !== "incoming")
-    .map(transferCard)
-    .join("");
+  const active = items.filter((t) => t.status !== "incoming");
+  els.transfers.innerHTML = active.map(transferCard).join("");
   renderIncoming(items.filter((t) => t.status === "incoming"));
 
   for (const btn of $$("[data-act]", els.transfers)) {
@@ -182,41 +161,37 @@ function renderTransfers() {
 
 function transferCard(tx) {
   const pct = tx.totalBytes ? Math.min(100, Math.round((tx.bytes / tx.totalBytes) * 100)) : 0;
-  const remain = tx.speed > 0 ? (tx.totalBytes - tx.bytes) / tx.speed : Infinity;
   const names = tx.files.map((f) => f.name).join(", ");
-  const dir = tx.direction === "send" ? "To" : "From";
+  const dir = tx.direction === "send" ? "Sending" : "Receiving";
   const actions = actionsFor(tx);
+  const label =
+    tx.status === "completed"
+      ? "Done"
+      : tx.status === "failed"
+        ? "Failed"
+        : tx.status === "paused"
+          ? "Paused"
+          : tx.status === "offering"
+            ? "Waiting"
+            : tx.status === "rejected"
+              ? "Declined"
+              : tx.status === "cancelled"
+                ? "Cancelled"
+                : `${pct}%`;
   return `
     <article class="tx status-${tx.status}">
       <div class="tx-top">
         <div>
           <div class="tx-name">${escapeHtml(names)}</div>
-          <div class="tx-sub">${dir} ${escapeHtml(tx.peerName)} · ${formatBytes(tx.totalBytes)} · ${modeLabel(tx.mode)}</div>
+          <div class="tx-sub">${dir} · ${formatBytes(tx.totalBytes)}</div>
         </div>
-        <div class="tx-pct">${tx.status === "completed" ? "Done" : tx.status === "failed" ? "Failed" : `${pct}%`}</div>
+        <div class="tx-pct">${label}</div>
       </div>
       <div class="bar"><i style="width:${tx.status === "completed" ? 100 : pct}%"></i></div>
-      <div class="tx-foot">
-        <span>${statusLabel(tx)} · ${formatRate(tx.speed)} · ETA ${formatEta(remain)}</span>
-        <span class="tx-actions">${actions}</span>
-      </div>
+      ${actions ? `<div class="tx-foot"><span class="tx-actions">${actions}</span></div>` : ""}
       ${tx.error ? `<div class="tx-error">${escapeHtml(tx.error)}</div>` : ""}
     </article>
   `;
-}
-
-function statusLabel(tx) {
-  const map = {
-    offering: "Waiting for accept",
-    incoming: "Incoming",
-    transferring: "Encrypted transfer",
-    paused: "Paused — resumable",
-    completed: "Saved",
-    failed: "Failed",
-    rejected: "Declined",
-    cancelled: "Cancelled",
-  };
-  return map[tx.status] || tx.status;
 }
 
 function actionsFor(tx) {
@@ -278,7 +253,7 @@ async function renderHistory() {
           <div class="hist-dir ${h.direction}">${h.direction === "sent" ? "↑" : "↓"}</div>
           <div>
             <div class="tx-name">${escapeHtml(names)}</div>
-            <div class="tx-sub">${escapeHtml(h.peerName || "")} · ${formatBytes(h.size || 0)} · ${modeLabel(h.mode || "")} · ${formatTime(h.createdAt)}</div>
+            <div class="tx-sub">${escapeHtml(shortName(h.peerName || ""))} · ${formatBytes(h.size || 0)} · ${formatTime(h.createdAt)}</div>
           </div>
         </article>`;
     })
@@ -289,8 +264,13 @@ function bindRoomUi(roomId) {
   const url = shareUrl(roomId);
   els.roomCode.textContent = roomId;
   els.shareLink.value = url;
-  els.qrImg.src = `/api/qr?text=${encodeURIComponent(url)}`;
+  const qrSrc = `/api/qr?text=${encodeURIComponent(url)}`;
+  els.qrImg.src = qrSrc;
   els.qrImg.alt = `QR code for room ${roomId}`;
+  if (els.qrInline) {
+    els.qrInline.src = qrSrc;
+    els.qrInline.alt = `Scan to join room ${roomId}`;
+  }
   if (els.lanHint) {
     els.lanHint.hidden = !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
   }

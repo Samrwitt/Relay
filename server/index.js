@@ -154,7 +154,7 @@ app.get("/api/qr", async (req, res) => {
       type: "png",
       width: 512,
       margin: 1,
-      color: { dark: "#0a0b0e", light: "#f4f7f4" },
+      color: { dark: "#1f8a4c", light: "#ffffff" },
       errorCorrectionLevel: "M",
     });
     res.setHeader("Content-Type", "image/png");
