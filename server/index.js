@@ -8,7 +8,7 @@ import QRCode from "qrcode";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 3478;
 const HOST = process.env.HOST || "0.0.0.0";
 const ROOM_TTL_MS = 1000 * 60 * 60 * 6;
 const MAX_PEERS = 8;
@@ -116,6 +116,18 @@ app.get("/vendor/nacl-fast.min.js", (_req, res) => {
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, rooms: rooms.size, uptime: process.uptime() });
+});
+
+app.get("/api/info", (req, res) => {
+  const urls = publicUrls(PORT);
+  const host = req.headers.host || `localhost:${PORT}`;
+  res.json({
+    port: PORT,
+    urls,
+    suggested:
+      urls.find((u) => !u.includes("localhost") && !u.includes("127.0.0.1")) ||
+      `${req.protocol}://${host}`,
+  });
 });
 
 app.post("/api/rooms", (_req, res) => {
@@ -330,6 +342,14 @@ function packBinary(header, payload) {
   payload.copy(out, 4 + h.length);
   return out;
 }
+
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`Port ${PORT} is already in use. Try PORT=3479 npm start`);
+    process.exit(1);
+  }
+  throw err;
+});
 
 server.listen(PORT, HOST, () => {
   const urls = publicUrls(PORT);

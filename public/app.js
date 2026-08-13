@@ -13,6 +13,7 @@ import {
   on,
   roomFromLocation,
   shareUrl,
+  loadShareOrigin,
 } from "./js/utils.js";
 import { loadKeyPair, exportPublicKey, fingerprint } from "./js/crypto.js";
 import { Signaling } from "./js/signaling.js";
@@ -34,9 +35,10 @@ const state = {
 
 const keys = loadKeyPair();
 const me = { id: deviceId(), ...detectDevice() };
-const signaling = new Signaling();
+let signaling = null;
 let mesh = null;
 let engine = null;
+let entering = false;
 
 const els = {
   landing: $("#landing"),
@@ -68,6 +70,7 @@ const els = {
   toast: $("#toast"),
   statusDot: $("#status-dot"),
   peerCount: $("#peer-count"),
+  lanHint: $("#lan-hint"),
 };
 
 function roomCode() {
@@ -97,6 +100,9 @@ function renderPeers() {
   els.devices.innerHTML = "";
 
   const all = state.you ? [state.you, ...peers] : peers;
+  if (!all.length) {
+    els.devices.innerHTML = `<p class="empty-transfers">Connecting…</p>`;
+  }
   for (const peer of all) {
     const mine = peer.id === state.you?.id;
     const mode = mine ? "you" : mesh?.modeOf(peer.id) || "connecting";
@@ -113,6 +119,12 @@ function renderPeers() {
       <div class="mode-pill mode-${mode}">${modeLabel(mode)}</div>
     `;
     els.devices.appendChild(card);
+  }
+  if (state.you && !peers.length) {
+    const hint = document.createElement("p");
+    hint.className = "empty-transfers";
+    hint.textContent = "Scan the QR or share the link to add a phone or another browser.";
+    els.devices.appendChild(hint);
   }
 
   const select = els.target;
@@ -279,6 +291,9 @@ function bindRoomUi(roomId) {
   els.shareLink.value = url;
   els.qrImg.src = `/api/qr?text=${encodeURIComponent(url)}`;
   els.qrImg.alt = `QR code for room ${roomId}`;
+  if (els.lanHint) {
+    els.lanHint.hidden = !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  }
 }
 
 async function enterRoom(roomId) {
@@ -287,6 +302,8 @@ async function enterRoom(roomId) {
     showToast("Enter a valid room code");
     return;
   }
+  if (entering) return;
+  entering = true;
 
   teardownSession();
   setView("room");
@@ -295,6 +312,7 @@ async function enterRoom(roomId) {
   bindRoomUi(roomId);
   history.replaceState({}, "", `/?room=${roomId}`);
 
+  signaling = new Signaling();
   mesh = new Mesh({
     signaling,
     localId: me.id,
@@ -349,20 +367,29 @@ async function enterRoom(roomId) {
     if (state.view === "room") els.statusDot.classList.add("on");
   });
 
-  await signaling.join({
-    roomId,
-    deviceId: me.id,
-    name: me.name,
-    platform: me.platform,
-    publicKey: exportPublicKey(keys),
-  });
+  try {
+    await signaling.join({
+      roomId,
+      deviceId: me.id,
+      name: me.name,
+      platform: me.platform,
+      publicKey: exportPublicKey(keys),
+    });
+  } catch {
+    showToast("Could not reach the relay server");
+    leaveRoom();
+    entering = false;
+    return;
+  }
 
   renderPeers();
   renderTransfers();
+  entering = false;
 }
 
 function teardownSession() {
-  signaling.close();
+  signaling?.close();
+  signaling = null;
   mesh?.close();
   mesh = null;
   engine = null;
@@ -462,6 +489,7 @@ function wireEvents() {
 
 async function boot() {
   wireEvents();
+  await loadShareOrigin();
   await renderHistory();
   const existing = roomFromLocation();
   if (existing) enterRoom(existing);

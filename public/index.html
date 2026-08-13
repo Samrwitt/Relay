@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#07080b" />
+    <meta name="description" content="Open a link on two devices and transfer huge files directly between them." />
+    <title>Relay — device to device</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Outfit:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg" aria-hidden="true"></div>
+
+    <header class="top">
+      <a class="brand" href="/" aria-label="Relay home">
+        <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
+          <circle cx="8" cy="16" r="4.2" fill="none" stroke="currentColor" stroke-width="2" />
+          <circle cx="24" cy="16" r="4.2" fill="none" stroke="currentColor" stroke-width="2" />
+          <path d="M12.2 16h7.6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+        </svg>
+        <span>Relay</span>
+      </a>
+      <div class="top-actions">
+        <button class="icon-btn" id="open-history" type="button" title="Transfer history">History</button>
+      </div>
+    </header>
+
+    <main id="landing">
+      <section class="hero">
+        <p class="eyebrow">Laptop ↔ Phone · Browser ↔ Browser</p>
+        <h1>Open a link on two devices and transfer huge files directly between them.</h1>
+        <p class="lede">
+          WebRTC peer-to-peer, encrypted chunks, resumable uploads, and a relay fallback when NAT gets in the way. Nothing is stored in the cloud.
+        </p>
+        <div class="cta">
+          <button class="btn primary lg" id="create-room" type="button">Create a room</button>
+          <form id="join-form" class="join">
+            <label class="sr-only" for="join-code">Room code</label>
+            <input id="join-code" name="code" maxlength="8" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" />
+            <button class="btn ghost" type="submit">Join</button>
+          </form>
+        </div>
+        <ul class="pills" aria-label="Capabilities">
+          <li>WebRTC P2P</li>
+          <li>Encrypted</li>
+          <li>Resumable</li>
+          <li>QR pairing</li>
+          <li>Relay fallback</li>
+          <li>Multi-device</li>
+        </ul>
+      </section>
+
+      <section class="features">
+        <article>
+          <h3>Transfer rooms</h3>
+          <p>Share a six-character code or a link. Every device that opens it sits in the same encrypted room.</p>
+        </article>
+        <article>
+          <h3>QR pairing</h3>
+          <p>Flash the QR from your laptop. Your phone camera opens the room — no accounts, no app store.</p>
+        </article>
+        <article>
+          <h3>Huge files, safely</h3>
+          <p>Files are sliced into 64&nbsp;KB chunks, encrypted with X25519 + XSalsa20-Poly1305, and acknowledged so a drop can resume.</p>
+        </article>
+        <article>
+          <h3>Fallback relay</h3>
+          <p>If ICE fails, chunks bounce through this server. The payload stays encrypted; the server only forwards bytes.</p>
+        </article>
+      </section>
+    </main>
+
+    <section id="room" hidden>
+      <div class="room-bar">
+        <div class="room-id-wrap">
+          <span class="live"><i id="status-dot"></i> Room</span>
+          <button class="room-code" id="copy-code" type="button" title="Copy code">
+            <span id="room-code">——————</span>
+          </button>
+        </div>
+        <div class="room-bar-actions">
+          <span class="peer-count"><strong id="peer-count">1</strong> devices</span>
+          <button class="btn ghost" id="open-qr" type="button">QR pair</button>
+          <button class="btn ghost danger" id="leave" type="button">Leave</button>
+        </div>
+      </div>
+      <p id="lan-hint" class="lan-hint" hidden>
+        This tab is on localhost — a phone cannot open that. Use the LAN URL printed in the terminal, then scan QR.
+      </p>
+
+      <div class="room-grid">
+        <aside class="panel devices-panel">
+          <div class="panel-head">
+            <h2>Devices</h2>
+            <p>Send to one, or everyone.</p>
+          </div>
+          <div id="devices" class="devices"></div>
+        </aside>
+
+        <div class="panel work-panel">
+          <div
+            id="drop"
+            class="drop"
+            tabindex="0"
+            role="button"
+            aria-label="Drop files to send"
+          >
+            <div class="drop-inner">
+              <strong>Drop files here</strong>
+              <p>or paste · they go out encrypted, chunked, and resumable</p>
+              <div class="drop-row">
+                <label class="sr-only" for="target">Send to</label>
+                <select id="target"></select>
+                <button class="btn primary" id="pick-files" type="button">Choose files</button>
+              </div>
+            </div>
+            <input id="file-input" type="file" multiple hidden />
+          </div>
+
+          <div id="incoming" class="incoming" hidden></div>
+          <div id="transfers" class="transfers"></div>
+        </div>
+      </div>
+    </section>
+
+    <div id="qr-modal" class="modal" hidden>
+      <div class="modal-card" role="dialog" aria-labelledby="qr-title">
+        <h2 id="qr-title">Pair another device</h2>
+        <p>Scan with a phone camera, or copy the link.</p>
+        <img id="qr-img" alt="Room QR code" width="280" height="280" />
+        <div class="link-row">
+          <input id="share-link" readonly />
+          <button class="btn primary" id="copy-link" type="button">Copy link</button>
+        </div>
+        <button class="btn ghost" id="close-qr" type="button">Close</button>
+      </div>
+    </div>
+
+    <aside id="history-panel" class="drawer" aria-label="Transfer history">
+      <div class="drawer-head">
+        <h2>Transfer history</h2>
+        <div>
+          <button class="text-btn" id="clear-history" type="button">Clear</button>
+          <button class="icon-btn" id="close-history" type="button">Close</button>
+        </div>
+      </div>
+      <div id="history-list" class="history-list"></div>
+    </aside>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="/vendor/nacl-fast.min.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

@@ -9,6 +9,7 @@ export class Signaling {
     this.closed = false;
     this.joinPayload = null;
     this.binaryWait = null;
+    this.heartbeat = null;
   }
 
   on(type, fn) {
@@ -40,6 +41,7 @@ export class Signaling {
       ws.binaryType = "arraybuffer";
       this.ws = ws;
       ws.onopen = () => {
+        this.startHeartbeat();
         this.emit("open");
         resolve();
       };
@@ -48,6 +50,7 @@ export class Signaling {
         reject(new Error("Socket error"));
       };
       ws.onclose = () => {
+        this.stopHeartbeat();
         this.emit("close");
         if (!this.closed) this.scheduleReconnect();
       };
@@ -108,9 +111,20 @@ export class Signaling {
     this.emit(msg.type, msg);
   }
 
+  startHeartbeat() {
+    this.stopHeartbeat();
+    this.heartbeat = setInterval(() => this.send({ type: "ping" }), 20000);
+  }
+
+  stopHeartbeat() {
+    clearInterval(this.heartbeat);
+    this.heartbeat = null;
+  }
+
   close() {
     this.closed = true;
     clearTimeout(this.reconnectTimer);
+    this.stopHeartbeat();
     this.joinPayload = null;
     try {
       this.ws?.close();

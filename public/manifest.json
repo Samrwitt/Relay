@@ -1,0 +1,16 @@
+{
+  "name": "Relay",
+  "short_name": "Relay",
+  "description": "Open a link on two devices and transfer huge files directly between them.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#07080b",
+  "theme_color": "#07080b",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

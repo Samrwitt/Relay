@@ -360,20 +360,11 @@ export class TransferEngine {
         }
         if (!tx._window.has(file.id)) tx._window.set(file.id, new Set());
         const inflight = tx._window.get(file.id);
-        const missing = missingIndices(file.totalChunks, acked);
-        let cursor = 0;
-
-        while (cursor < missing.length) {
-          if (tx.paused || tx.status !== "transferring") return;
-          while (inflight.size >= WINDOW_SIZE) {
-            await new Promise((r) => setTimeout(r, 20));
-            if (tx.paused || tx.status !== "transferring") return;
-          }
-          const index = missing[cursor++];
-          if (acked.has(index) || inflight.has(index)) continue;
+        const sendIndex = async (index) => {
           const start = index * file.chunkSize;
           const end = Math.min(start + file.chunkSize, file.size);
-          const slice = source.size === 0 ? new Uint8Array() : new Uint8Array(await source.slice(start, end).arrayBuffer());
+          const slice =
+            source.size === 0 ? new Uint8Array() : new Uint8Array(await source.slice(start, end).arrayBuffer());
           const { nonce, cipher } = encryptChunk(this.keys, peer.publicKey, slice);
           inflight.add(index);
           const used = await link.send(
@@ -381,12 +372,37 @@ export class TransferEngine {
             cipher
           );
           tx.mode = used;
-        }
+        };
 
-        const deadline = Date.now() + 120_000;
-        while (acked.size < file.totalChunks && Date.now() < deadline) {
+        let rounds = 0;
+        while (acked.size < file.totalChunks && rounds < 12) {
           if (tx.paused || tx.status !== "transferring") return;
-          await new Promise((r) => setTimeout(r, 40));
+          const missing = missingIndices(file.totalChunks, acked).filter((i) => !inflight.has(i));
+          for (const index of missing) {
+            if (tx.paused || tx.status !== "transferring") return;
+            while (inflight.size >= WINDOW_SIZE) {
+              await new Promise((r) => setTimeout(r, 20));
+              if (tx.paused || tx.status !== "transferring") return;
+            }
+            await sendIndex(index);
+          }
+          const waitUntil = Date.now() + 4000;
+          while (acked.size < file.totalChunks && Date.now() < waitUntil) {
+            if (tx.paused || tx.status !== "transferring") return;
+            await new Promise((r) => setTimeout(r, 40));
+            if (![...inflight].some((i) => !acked.has(i))) break;
+          }
+          for (const index of [...inflight]) {
+            if (!acked.has(index)) inflight.delete(index);
+          }
+          rounds += 1;
+        }
+        if (acked.size < file.totalChunks && !tx.paused) {
+          tx.error = "Transfer stalled — tap Resume to retry missing chunks";
+          tx.status = "paused";
+          tx.paused = true;
+          this.notify();
+          return;
         }
       }
     } catch (err) {

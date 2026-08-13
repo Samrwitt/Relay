@@ -1,0 +1,50 @@
+# Relay
+
+Open a link on two devices and transfer huge files directly between them.
+
+Laptop ↔ phone. Browser ↔ browser. No accounts, no cloud storage.
+
+## What it does
+
+- **Transfer rooms** — create a six-character room, share the link
+- **QR pairing** — scan from a phone camera to join
+- **WebRTC peer-to-peer** — files move device-to-device when NAT allows
+- **Encrypted transfers** — X25519 key exchange, XSalsa20-Poly1305 per chunk
+- **Chunked + resumable** — 64 KB slices, acknowledgements, pause/resume, IndexedDB replay
+- **Fallback relay** — if ICE fails, the server forwards ciphertext only
+- **Multi-device** — up to 8 peers; send to one device or everyone
+- **Transfer history** — local log in IndexedDB
+
+The signaling/relay server never sees plaintext. It only exchanges SDP/ICE and opaque binary frames.
+
+## Run it
+
+```bash
+npm install
+npm start
+```
+
+Then open the printed URL on a laptop and a phone (same Wi-Fi is easiest).
+
+```
+http://localhost:3478
+http://YOUR-LAN-IP:3478
+```
+
+`npm run dev` restarts the server on file changes. Use `PORT=8080 npm start` if you want a different port.
+
+## How a transfer works
+
+1. Each device generates a durable X25519 keypair and joins a room over WebSocket.
+2. Peers try WebRTC (STUN). If the data channel is not open in ~9s, they switch to the relay.
+3. The sender offers file metadata. The receiver accepts and reports any chunks already stored.
+4. Each chunk is encrypted to the recipient’s public key, sent, decrypted, stored, and acked.
+5. When every chunk is present, the browser assembles a Blob and downloads it.
+
+Pause, reload, or a dropped link can resume from the last acknowledged chunk.
+
+## Notes
+
+- WebRTC works best on `localhost` or HTTPS. On plain `http://LAN-IP`, Relay still transfers via the encrypted relay fallback.
+- Put this behind TLS (Caddy, nginx, or a tunnel) for reliable P2P on the public internet.
+- Optional: `PORT=8080 npm start`

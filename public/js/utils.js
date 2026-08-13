@@ -187,8 +187,24 @@ export async function copyText(text) {
   }
 }
 
+let shareOrigin = location.origin;
+
+export async function loadShareOrigin() {
+  if (!/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
+    shareOrigin = location.origin;
+    return shareOrigin;
+  }
+  try {
+    const info = await fetch("/api/info").then((r) => r.json());
+    if (info.suggested) shareOrigin = info.suggested.replace(/\/$/, "");
+  } catch {
+    shareOrigin = location.origin;
+  }
+  return shareOrigin;
+}
+
 export function shareUrl(roomId) {
-  return `${location.origin}/r/${roomId}`;
+  return `${shareOrigin}/r/${roomId}`;
 }
 
 export function roomFromLocation() {
