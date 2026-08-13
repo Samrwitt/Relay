@@ -27,11 +27,21 @@ npm start
 Then open the printed URL on a laptop and a phone (same Wi-Fi is easiest).
 
 ```
-http://localhost:3478
-http://YOUR-LAN-IP:3478
+https://localhost:3478
+https://YOUR-LAN-IP:3478
 ```
 
-`npm run dev` restarts the server on file changes. Use `PORT=8080 npm start` if you want a different port.
+If 3478 is already taken, Relay moves to **3443** (that is the case right now).
+
+The first visit shows a certificate warning (self-signed). Accept it on the laptop and on the phone (`Advanced` → `Proceed` / `Visit website`). After that, WebSockets and WebRTC run in a secure context.
+
+`npm run dev` restarts the server on file changes. Use `PORT=8443 npm start` if you want a different port.
+
+To use your own certificate:
+
+```bash
+SSL_CERT=/path/to/fullchain.pem SSL_KEY=/path/to/privkey.pem npm start
+```
 
 ## How a transfer works
 
@@ -45,6 +55,6 @@ Pause, reload, or a dropped link can resume from the last acknowledged chunk.
 
 ## Notes
 
-- WebRTC works best on `localhost` or HTTPS. On plain `http://LAN-IP`, Relay still transfers via the encrypted relay fallback.
-- Put this behind TLS (Caddy, nginx, or a tunnel) for reliable P2P on the public internet.
-- Optional: `PORT=8080 npm start`
+- Relay serves **HTTPS** (and `wss://`) on port 3478, or 3443 if that port is busy. HTTP on 3080 redirects to HTTPS.
+- On a phone, open the `https://LAN-IP:…` link once and trust the cert before scanning a QR.
+- Optional: `PORT=8443 npm start`

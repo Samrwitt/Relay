@@ -1,15 +1,20 @@
 import http from "node:http";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer } from "ws";
 import QRCode from "qrcode";
+import { loadTls } from "./tls.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const PORT = Number(process.env.PORT) || 3478;
+const HTTP_PORT = Number(process.env.HTTP_PORT) || 3080;
+let listenPort = PORT;
 const HOST = process.env.HOST || "0.0.0.0";
+const SCHEME = "https";
 const ROOM_TTL_MS = 1000 * 60 * 60 * 6;
 const MAX_PEERS = 8;
 const MAX_TEXT = 64 * 1024;
@@ -24,11 +29,11 @@ function randomCode(len = 6) {
 }
 
 function publicUrls(port) {
-  const urls = [`http://localhost:${port}`];
+  const urls = [`${SCHEME}://localhost:${port}`];
   for (const nets of Object.values(os.networkInterfaces())) {
     for (const net of nets || []) {
       if (net.family === "IPv4" && !net.internal) {
-        urls.push(`http://${net.address}:${port}`);
+        urls.push(`${SCHEME}://${net.address}:${port}`);
       }
     }
   }
@@ -119,14 +124,14 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/info", (req, res) => {
-  const urls = publicUrls(PORT);
-  const host = req.headers.host || `localhost:${PORT}`;
+  const urls = publicUrls(listenPort);
+  const host = req.headers.host || `localhost:${listenPort}`;
   res.json({
-    port: PORT,
+    port: listenPort,
     urls,
     suggested:
       urls.find((u) => !u.includes("localhost") && !u.includes("127.0.0.1")) ||
-      `${req.protocol}://${host}`,
+      `https://${host}`,
   });
 });
 
@@ -154,7 +159,7 @@ app.get("/api/qr", async (req, res) => {
       type: "png",
       width: 512,
       margin: 1,
-      color: { dark: "#1f8a4c", light: "#ffffff" },
+      color: { dark: "#000000", light: "#ffffff" },
       errorCorrectionLevel: "M",
     });
     res.setHeader("Content-Type", "image/png");
@@ -169,8 +174,12 @@ app.get("/r/:id", (req, res) => {
   res.redirect(`/?room=${encodeURIComponent(req.params.id.toUpperCase())}`);
 });
 
-const server = http.createServer(app);
+const tls = loadTls();
+const server = https.createServer({ key: tls.key, cert: tls.cert }, app);
 const wss = new WebSocketServer({ server, path: "/ws" });
+wss.on("error", (err) => {
+  if (err.code !== "EADDRINUSE") console.warn("WebSocket:", err.message);
+});
 
 function send(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
@@ -343,17 +352,58 @@ function packBinary(header, payload) {
   return out;
 }
 
-server.on("error", (err) => {
-  if (err.code === "EADDRINUSE") {
-    console.error(`Port ${PORT} is already in use. Try PORT=3479 npm start`);
-    process.exit(1);
-  }
-  throw err;
-});
+function listenHttps(port) {
+  return new Promise((resolve, reject) => {
+    const onError = (err) => {
+      server.off("listening", onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve(port);
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, HOST);
+  });
+}
 
-server.listen(PORT, HOST, () => {
-  const urls = publicUrls(PORT);
-  console.log("\n  RELAY  ·  peer-to-peer file transfer\n");
-  for (const url of urls) console.log(`    ${url}`);
-  console.log("\n  Open the same link on a laptop and a phone.\n");
-});
+function startRedirect(httpsPort) {
+  const redirect = http.createServer((req, res) => {
+    const host = String(req.headers.host || `localhost:${HTTP_PORT}`).replace(/:\d+$/, `:${httpsPort}`);
+    res.writeHead(301, { Location: `https://${host}${req.url || "/"}` });
+    res.end();
+  });
+  redirect.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      console.warn(`HTTP redirect port ${HTTP_PORT} is busy; HTTPS is still up.`);
+      return;
+    }
+    console.warn("HTTP redirect failed:", err.message);
+  });
+  redirect.listen(HTTP_PORT, HOST);
+}
+
+const fallbackPorts = [...new Set([PORT, 3443, 8443])];
+for (const port of fallbackPorts) {
+  try {
+    listenPort = await listenHttps(port);
+    break;
+  } catch (err) {
+    if (err.code !== "EADDRINUSE" || port === fallbackPorts[fallbackPorts.length - 1]) {
+      if (err.code === "EADDRINUSE") {
+        console.error(`Ports ${fallbackPorts.join(", ")} are in use. Try PORT=9443 npm start`);
+        process.exit(1);
+      }
+      throw err;
+    }
+    console.warn(`Port ${port} is in use, trying the next one…`);
+  }
+}
+
+startRedirect(listenPort);
+const urls = publicUrls(listenPort);
+console.log("\n  RELAY  ·  https\n");
+for (const url of urls) console.log(`    ${url}`);
+console.log("\n  First visit: accept the certificate warning on each device.");
+console.log("  Phones: Advanced → Proceed / Visit website.\n");
