@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: relay
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: node server/index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RELAY_HTTP
+        value: "1"

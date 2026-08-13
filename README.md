@@ -17,7 +17,19 @@ Laptop ↔ phone. Browser ↔ browser. No accounts, no cloud storage.
 
 The signaling/relay server never sees plaintext. It only exchanges SDP/ICE and opaque binary frames.
 
-## Run it
+## Deploy
+
+The app listens on HTTP in production (`RELAY_HTTP=1`). Fly, Render, or Railway terminate HTTPS in front.
+
+```bash
+# Fly.io
+fly launch --copy-config --yes
+fly deploy
+```
+
+Or connect this GitHub repo to [Render](https://render.com) — `render.yaml` is already in the repo.
+
+## Run it locally
 
 ```bash
 npm install

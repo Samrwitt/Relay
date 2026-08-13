@@ -14,6 +14,14 @@ const PORT = Number(process.env.PORT) || 3478;
 const HTTP_PORT = Number(process.env.HTTP_PORT) || 3080;
 let listenPort = PORT;
 const HOST = process.env.HOST || "0.0.0.0";
+const HOSTED = Boolean(
+  process.env.RENDER ||
+    process.env.RAILWAY_ENVIRONMENT ||
+    process.env.FLY_APP_NAME ||
+    process.env.K_SERVICE ||
+    process.env.RELAY_HTTP === "1" ||
+    (process.env.NODE_ENV === "production" && process.env.RELAY_TLS !== "1")
+);
 const SCHEME = "https";
 const ROOM_TTL_MS = 1000 * 60 * 60 * 6;
 const MAX_PEERS = 8;
@@ -113,6 +121,7 @@ class Room {
 
 const app = express();
 app.disable("x-powered-by");
+if (HOSTED) app.set("trust proxy", 1);
 app.use(express.json({ limit: "32kb" }));
 app.use(express.static(path.join(ROOT, "public"), { extensions: ["html"] }));
 app.get("/vendor/nacl-fast.min.js", (_req, res) => {
@@ -124,14 +133,17 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/info", (req, res) => {
-  const urls = publicUrls(listenPort);
   const host = req.headers.host || `localhost:${listenPort}`;
+  const proto = String(req.headers["x-forwarded-proto"] || (HOSTED ? "https" : "https")).split(",")[0];
+  const publicUrl = process.env.PUBLIC_URL || `${proto}://${host}`;
+  const urls = HOSTED ? [publicUrl] : publicUrls(listenPort);
   res.json({
     port: listenPort,
     urls,
     suggested:
-      urls.find((u) => !u.includes("localhost") && !u.includes("127.0.0.1")) ||
-      `https://${host}`,
+      HOSTED
+        ? publicUrl
+        : urls.find((u) => !u.includes("localhost") && !u.includes("127.0.0.1")) || publicUrl,
   });
 });
 
@@ -174,8 +186,10 @@ app.get("/r/:id", (req, res) => {
   res.redirect(`/?room=${encodeURIComponent(req.params.id.toUpperCase())}`);
 });
 
-const tls = loadTls();
-const server = https.createServer({ key: tls.key, cert: tls.cert }, app);
+const tls = HOSTED ? null : loadTls();
+const server = HOSTED
+  ? http.createServer(app)
+  : https.createServer({ key: tls.key, cert: tls.cert }, app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 wss.on("error", (err) => {
   if (err.code !== "EADDRINUSE") console.warn("WebSocket:", err.message);
@@ -384,26 +398,38 @@ function startRedirect(httpsPort) {
   redirect.listen(HTTP_PORT, HOST);
 }
 
-const fallbackPorts = [...new Set([PORT, 3443, 8443])];
-for (const port of fallbackPorts) {
-  try {
-    listenPort = await listenHttps(port);
-    break;
-  } catch (err) {
-    if (err.code !== "EADDRINUSE" || port === fallbackPorts[fallbackPorts.length - 1]) {
-      if (err.code === "EADDRINUSE") {
-        console.error(`Ports ${fallbackPorts.join(", ")} are in use. Try PORT=9443 npm start`);
-        process.exit(1);
+if (HOSTED) {
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(PORT, HOST, resolve);
+  });
+  listenPort = PORT;
+  const publicUrl =
+    process.env.PUBLIC_URL ||
+    (process.env.FLY_APP_NAME ? `https://${process.env.FLY_APP_NAME}.fly.dev` : `https://localhost:${PORT}`);
+  console.log(`\n  RELAY  ·  ${publicUrl}\n`);
+} else {
+  const fallbackPorts = [...new Set([PORT, 3443, 8443])];
+  for (const port of fallbackPorts) {
+    try {
+      listenPort = await listenHttps(port);
+      break;
+    } catch (err) {
+      if (err.code !== "EADDRINUSE" || port === fallbackPorts[fallbackPorts.length - 1]) {
+        if (err.code === "EADDRINUSE") {
+          console.error(`Ports ${fallbackPorts.join(", ")} are in use. Try PORT=9443 npm start`);
+          process.exit(1);
+        }
+        throw err;
       }
-      throw err;
+      console.warn(`Port ${port} is in use, trying the next one…`);
     }
-    console.warn(`Port ${port} is in use, trying the next one…`);
   }
-}
 
-startRedirect(listenPort);
-const urls = publicUrls(listenPort);
-console.log("\n  RELAY  ·  https\n");
-for (const url of urls) console.log(`    ${url}`);
-console.log("\n  First visit: accept the certificate warning on each device.");
-console.log("  Phones: Advanced → Proceed / Visit website.\n");
+  startRedirect(listenPort);
+  const urls = publicUrls(listenPort);
+  console.log("\n  RELAY  ·  https\n");
+  for (const url of urls) console.log(`    ${url}`);
+  console.log("\n  First visit: accept the certificate warning on each device.");
+  console.log("  Phones: Advanced → Proceed / Visit website.\n");
+}
