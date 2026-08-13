@@ -1,0 +1,19 @@
+{
+  "name": "relay",
+  "version": "1.0.0",
+  "description": "Open a link on two devices and transfer huge files directly between them.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4",
+    "tweetnacl": "^1.0.3",
+    "ws": "^8.18.1"
+  }
+}
