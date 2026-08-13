@@ -57,34 +57,31 @@
 
       <div id="waiting" class="waiting">
         <img id="qr-inline" alt="Scan to join this room" width="220" height="220" />
-        <h2>Open this on your other device</h2>
-        <p>Scan the code, or type the room code above.</p>
+        <h2>Open this on other devices</h2>
+        <p>Anyone who joins this room can get the same files.</p>
       </div>
 
       <div id="ready" class="ready" hidden>
         <div id="devices" class="devices"></div>
+        <div id="incoming" class="incoming" hidden></div>
+        <div id="transfers" class="transfers"></div>
         <div
           id="drop"
           class="drop"
           tabindex="0"
           role="button"
-          aria-label="Choose files to send"
+          aria-label="Send files"
         >
           <div class="drop-inner">
-            <strong>Drop files here</strong>
-            <p>or tap to choose</p>
+            <strong id="drop-title">Drop files here</strong>
+            <p id="drop-hint">Everyone in the room will get the same files</p>
             <div class="drop-row">
-              <label class="sr-only" for="target">Send to</label>
-              <select id="target" hidden></select>
               <button class="btn primary" id="pick-files" type="button">Choose files</button>
             </div>
           </div>
           <input id="file-input" type="file" multiple hidden />
         </div>
       </div>
-
-      <div id="incoming" class="incoming" hidden></div>
-      <div id="transfers" class="transfers"></div>
     </section>
 
     <div id="qr-modal" class="modal" hidden>

@@ -7,9 +7,9 @@ import {
   setFromRanges,
   downloadBlob,
   snapshotFiles,
-  sleep,
 } from "./utils.js";
 import { encryptChunk, decryptChunk } from "./crypto.js";
+import { zipFiles } from "./zip.js";
 import * as idb from "./idb.js";
 
 export class TransferEngine {
@@ -51,6 +51,7 @@ export class TransferEngine {
     if (!files.length || !targetIds.length) return [];
 
     const created = [];
+    const groupId = targetIds.length > 1 ? uid("grp") : null;
     for (const to of targetIds) {
       const transferId = uid("tx");
       const metaFiles = files.map((file) => {
@@ -72,6 +73,8 @@ export class TransferEngine {
         to,
         from: this.localId,
         peerName: this.peers.get(to)?.name || "Device",
+        groupId,
+        groupSize: targetIds.length,
         files: metaFiles,
         status: "offering",
         mode: this.mesh.modeOf(to),
@@ -422,14 +425,27 @@ export class TransferEngine {
     if (file?.blob) downloadBlob(file.blob, file.name);
   }
 
+  async saveAll(transferId) {
+    const tx = this.transfers.get(transferId);
+    if (!tx) return;
+    const ready = tx.files.filter((f) => f.blob);
+    if (!ready.length) return;
+    if (ready.length === 1) {
+      downloadBlob(ready[0].blob, ready[0].name);
+      return;
+    }
+    const zip = await zipFiles(ready);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadBlob(zip, `relay-${ready.length}-files-${stamp}.zip`);
+  }
+
   async finishFile(tx, file) {
     try {
       const blob = await idb.assembleBlob(tx.id, file.id, file.totalChunks, file.type);
       file.blob = blob;
       file.done = true;
-      downloadBlob(blob, file.name);
-      await sleep(400);
       if (tx.files.every((f) => f.done)) await this.completeReceive(tx);
+      else this.notify();
     } catch (err) {
       tx.error = err.message;
       tx.status = "failed";

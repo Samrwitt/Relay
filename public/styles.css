@@ -176,7 +176,9 @@ a { color: inherit; }
   padding: 6px 12px 6px 6px;
   font-size: 0.92rem;
 }
-.device.is-you { border-color: var(--green); background: var(--green-soft); }
+button.device { cursor: pointer; }
+.device.is-you { border-color: var(--line); }
+.device.is-selected { border-color: var(--green); background: var(--green-soft); }
 .avatar {
   width: 28px;
   height: 28px;
@@ -200,7 +202,17 @@ a { color: inherit; }
   cursor: pointer;
   background: var(--card);
   outline: none;
+  margin-top: 14px;
 }
+.drop.compact {
+  min-height: 0;
+  padding: 16px 14px;
+  position: sticky;
+  bottom: calc(10px + var(--safe-bottom));
+  box-shadow: 0 8px 28px rgba(20, 36, 26, 0.08);
+  z-index: 4;
+}
+.drop.compact .drop-inner p { margin-bottom: 12px; }
 .drop.over, .drop:focus-visible {
   border-color: var(--green);
   background: var(--green-soft);
@@ -260,6 +272,20 @@ a { color: inherit; }
   align-items: center;
   gap: 8px;
 }
+.tx-people {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.tx-people li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
 .incoming-actions { display: flex; gap: 8px; }
 
 .transfers { display: grid; gap: 10px; margin-top: 14px; }
@@ -294,7 +320,7 @@ a { color: inherit; }
   border-radius: inherit;
 }
 .tx-error { color: var(--danger); font-size: 0.85rem; margin-top: 8px; }
-.tx-actions { display: flex; gap: 8px; }
+.tx-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .empty-transfers { color: var(--muted); text-align: center; padding: 8px; }
 
 .modal {

@@ -58,7 +58,8 @@ const els = {
   drop: $("#drop"),
   fileInput: $("#file-input"),
   pickFiles: $("#pick-files"),
-  target: $("#target"),
+  dropTitle: $("#drop-title"),
+  dropHint: $("#drop-hint"),
   transfers: $("#transfers"),
   historyList: $("#history-list"),
   historyPanel: $("#history-panel"),
@@ -96,39 +97,79 @@ function setView(view) {
   document.body.dataset.view = view;
 }
 
+function selectedIds() {
+  if (state.target === "*" || !state.target) return state.peers.map((p) => p.id);
+  if (Array.isArray(state.target)) return state.target.filter((id) => state.peers.some((p) => p.id === id));
+  return state.peers.some((p) => p.id === state.target) ? [state.target] : state.peers.map((p) => p.id);
+}
+
+function isEveryone() {
+  const ids = selectedIds();
+  return state.peers.length > 0 && ids.length === state.peers.length;
+}
+
+function toggleRecipient(id) {
+  if (id === "*") {
+    state.target = "*";
+  } else if (isEveryone()) {
+    state.target = [id];
+  } else {
+    const set = new Set(selectedIds());
+    if (set.has(id)) set.delete(id);
+    else set.add(id);
+    state.target = set.size === 0 || set.size === state.peers.length ? "*" : [...set];
+  }
+  renderPeers();
+}
+
+function recipientLabel() {
+  const n = selectedIds().length;
+  if (!n) return "Wait for someone to join";
+  if (n === 1 && state.peers.length === 1) return "They will get the files";
+  if (isEveryone()) return `Everyone in the room will get the same files · ${n} devices`;
+  return `Sending to ${n} device${n === 1 ? "" : "s"}`;
+}
+
 function renderPeers() {
   const peers = state.peers;
   const connected = peers.length > 0;
   els.peerCount.textContent = String(peers.length + (state.you ? 1 : 0));
   if (els.waiting) els.waiting.hidden = connected;
   if (els.ready) els.ready.hidden = !connected;
-  if (els.openQr) els.openQr.hidden = !connected;
+  if (els.openQr) els.openQr.hidden = false;
+
+  const ids = new Set(selectedIds());
+  if (state.target !== "*" && ids.size !== (Array.isArray(state.target) ? state.target.length : 1)) {
+    state.target = "*";
+  }
 
   els.devices.innerHTML = "";
+  if (peers.length >= 2) {
+    const everyone = document.createElement("button");
+    everyone.type = "button";
+    everyone.className = `device ${isEveryone() ? "is-selected" : ""}`;
+    everyone.innerHTML = `<div class="avatar">All</div><div class="device-name">Everyone</div>`;
+    everyone.addEventListener("click", () => toggleRecipient("*"));
+    els.devices.appendChild(everyone);
+  }
+
   const all = state.you ? [state.you, ...peers] : peers;
   for (const peer of all) {
     const mine = peer.id === state.you?.id;
-    const card = document.createElement("article");
-    card.className = `device ${mine ? "is-you" : ""}`;
+    const selected = !mine && (isEveryone() || ids.has(peer.id));
+    const card = document.createElement(mine ? "article" : "button");
+    if (!mine) card.type = "button";
+    card.className = `device ${mine ? "is-you" : ""} ${selected ? "is-selected" : ""}`;
     card.innerHTML = `
       <div class="avatar">${initials(peer.name)}</div>
       <div class="device-name">${escapeHtml(shortName(peer.name))}${mine ? " <span>you</span>" : ""}</div>
     `;
+    if (!mine) card.addEventListener("click", () => toggleRecipient(peer.id));
     els.devices.appendChild(card);
   }
 
-  const select = els.target;
-  const prev = select.value || state.target;
-  select.innerHTML = `<option value="*">Everyone</option>`;
-  for (const peer of peers) {
-    const opt = document.createElement("option");
-    opt.value = peer.id;
-    opt.textContent = shortName(peer.name);
-    select.appendChild(opt);
-  }
-  select.hidden = peers.length < 2;
-  select.value = [...select.options].some((o) => o.value === prev) ? prev : "*";
-  state.target = select.value;
+  const more = (engine?.list() || []).some((t) => t.status !== "incoming");
+  if (els.dropHint && !more) els.dropHint.textContent = recipientLabel();
 }
 
 function shortName(name) {
@@ -146,18 +187,37 @@ function escapeHtml(s) {
 function renderTransfers() {
   const items = engine?.list() || [];
   const active = items.filter((t) => t.status !== "incoming");
-  els.transfers.innerHTML = active.map(transferCard).join("");
+  const groups = [];
+  const seen = new Set();
+  for (const tx of active) {
+    const key = tx.direction === "send" && tx.groupId ? tx.groupId : tx.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    groups.push(active.filter((t) => (t.groupId && t.groupId === key) || t.id === key));
+  }
+  els.transfers.innerHTML = groups.map(transferCard).join("");
   renderIncoming(items.filter((t) => t.status === "incoming"));
+  const more = active.length > 0;
+  els.drop?.classList.toggle("compact", more);
+  if (els.dropTitle) els.dropTitle.textContent = more ? "Send more files" : "Drop files here";
+  if (els.dropHint) {
+    els.dropHint.textContent = more
+      ? `${recipientLabel()} · add another batch anytime`
+      : recipientLabel();
+  }
+  if (els.pickFiles) els.pickFiles.textContent = more ? "Send more files" : "Choose files";
 
   for (const btn of $$("[data-act]", els.transfers)) {
     btn.addEventListener("click", () => {
       const id = btn.dataset.id;
       const act = btn.dataset.act;
-      if (act === "pause") engine.pause(id);
-      if (act === "resume") engine.resume(id);
-      if (act === "cancel") engine.cancel(id);
+      const ids = (btn.dataset.ids || id || "").split(",").filter(Boolean);
+      if (act === "pause") ids.forEach((i) => engine.pause(i));
+      if (act === "resume") ids.forEach((i) => engine.resume(i));
+      if (act === "cancel") ids.forEach((i) => engine.cancel(i));
       if (act === "reject") engine.reject(id);
       if (act === "save") engine.saveFile(id, btn.dataset.file);
+      if (act === "save-all") engine.saveAll(id);
     });
   }
 }
@@ -169,65 +229,95 @@ function filePct(tx, file) {
   return Math.min(100, Math.round(((set?.size || 0) / file.totalChunks) * 100));
 }
 
-function transferCard(tx) {
+function statusText(tx) {
   const pct = tx.totalBytes ? Math.min(100, Math.round((tx.bytes / tx.totalBytes) * 100)) : 0;
+  if (tx.status === "completed") return "Done";
+  if (tx.status === "failed") return "Failed";
+  if (tx.status === "paused") return "Paused";
+  if (tx.status === "offering") return "Waiting";
+  if (tx.status === "rejected") return "Declined";
+  if (tx.status === "cancelled") return "Cancelled";
+  return `${pct}%`;
+}
+
+function transferCard(group) {
+  const list = Array.isArray(group) ? group : [group];
+  const tx = list[0];
+  const many = list.length > 1;
+  const bytes = list.reduce((s, t) => s + t.bytes, 0);
+  const total = list.reduce((s, t) => s + t.totalBytes, 0);
+  const pct = total ? Math.min(100, Math.round((bytes / total) * 100)) : 0;
+  const allDone = list.every((t) => t.status === "completed");
   const dir = tx.direction === "send" ? "Sending" : "Receiving";
-  const actions = actionsFor(tx);
-  const label =
-    tx.status === "completed"
-      ? "Done"
-      : tx.status === "failed"
-        ? "Failed"
-        : tx.status === "paused"
-          ? "Paused"
-          : tx.status === "offering"
-            ? "Waiting"
-            : tx.status === "rejected"
-              ? "Declined"
-              : tx.status === "cancelled"
-                ? "Cancelled"
-                : `${pct}%`;
+  const who = many
+    ? `to ${list.length} devices`
+    : tx.direction === "send"
+      ? `to ${escapeHtml(shortName(tx.peerName))}`
+      : `from ${escapeHtml(shortName(tx.peerName))}`;
+  const actions = actionsFor(list);
   const fileRows = tx.files
     .map((file) => {
       const fp = filePct(tx, file);
-      const save =
-        file.blob && tx.direction === "receive"
-          ? `<button class="text-btn" data-act="save" data-id="${tx.id}" data-file="${file.id}">Save</button>`
-          : "";
       return `<li class="tx-file">
         <span class="tx-file-name">${escapeHtml(file.name)}</span>
-        <span class="tx-file-meta">${formatBytes(file.size)} · ${file.done || tx.status === "completed" ? "Done" : `${fp}%`}${save}</span>
+        <span class="tx-file-meta">${formatBytes(file.size)} · ${file.done || tx.status === "completed" ? "Done" : `${fp}%`}</span>
       </li>`;
     })
     .join("");
+  const people = many
+    ? `<ul class="tx-people">${list
+        .map(
+          (t) =>
+            `<li><span>${escapeHtml(shortName(t.peerName))}</span><span>${statusText(t)}</span></li>`
+        )
+        .join("")}</ul>`
+    : "";
   return `
-    <article class="tx status-${tx.status}">
+    <article class="tx status-${allDone ? "completed" : tx.status}">
       <div class="tx-top">
         <div>
-          <div class="tx-name">${tx.files.length} file${tx.files.length === 1 ? "" : "s"}</div>
+          <div class="tx-name">${tx.files.length} file${tx.files.length === 1 ? "" : "s"} ${who}</div>
           <div class="tx-sub">${dir} · ${formatBytes(tx.totalBytes)}</div>
         </div>
-        <div class="tx-pct">${label}</div>
+        <div class="tx-pct">${allDone ? "Done" : many ? `${pct}%` : statusText(tx)}</div>
       </div>
-      <div class="bar"><i style="width:${tx.status === "completed" ? 100 : pct}%"></i></div>
+      <div class="bar"><i style="width:${allDone ? 100 : pct}%"></i></div>
       <ul class="tx-files">${fileRows}</ul>
+      ${people}
       ${actions ? `<div class="tx-foot"><span class="tx-actions">${actions}</span></div>` : ""}
-      ${tx.error ? `<div class="tx-error">${escapeHtml(tx.error)}</div>` : ""}
+      ${list
+        .filter((t) => t.error)
+        .map((t) => `<div class="tx-error">${escapeHtml(shortName(t.peerName))}: ${escapeHtml(t.error)}</div>`)
+        .join("")}
     </article>
   `;
 }
 
-function actionsFor(tx) {
-  const id = `data-id="${tx.id}"`;
-  if (tx.status === "transferring") {
-    return `<button class="text-btn" data-act="pause" ${id}>Pause</button><button class="text-btn" data-act="cancel" ${id}>Cancel</button>`;
+function actionsFor(list) {
+  const txs = Array.isArray(list) ? list : [list];
+  const tx = txs[0];
+  const ids = txs.map((t) => t.id).join(",");
+  const id = `data-id="${tx.id}" data-ids="${ids}"`;
+  const ready = tx.direction === "receive" ? tx.files.filter((f) => f.blob) : [];
+  const save =
+    ready.length > 1
+      ? `<button class="btn primary" data-act="save-all" ${id}>Save all</button>`
+      : ready.length === 1
+        ? `<button class="btn primary" data-act="save" ${id} data-file="${ready[0].id}">Save</button>`
+        : "";
+  const anyTransfer = txs.some((t) => t.status === "transferring");
+  const anyPaused = txs.some((t) => t.status === "paused");
+  const anyOffer = txs.some((t) => t.status === "offering");
+  if (anyTransfer) {
+    return `${save}<button class="text-btn" data-act="pause" ${id}>Pause</button><button class="text-btn" data-act="cancel" ${id}>Cancel</button>`;
   }
-  if (tx.status === "paused") {
-    return `<button class="text-btn" data-act="resume" ${id}>Resume</button><button class="text-btn" data-act="cancel" ${id}>Cancel</button>`;
+  if (anyPaused) {
+    return `${save}<button class="text-btn" data-act="resume" ${id}>Resume</button><button class="text-btn" data-act="cancel" ${id}>Cancel</button>`;
   }
-  if (tx.status === "offering") {
+  if (anyOffer) {
     return `<button class="text-btn" data-act="cancel" ${id}>Cancel</button>`;
   }
+  if (save) return save;
   return "";
 }
 
@@ -417,9 +507,18 @@ async function sendPicked(files) {
     showToast("Wait for another device to join");
     return;
   }
-  const targets = state.target === "*" ? state.peers.map((p) => p.id) : [state.target];
+  const targets = selectedIds();
+  if (!targets.length) {
+    showToast("Wait for another device to join");
+    return;
+  }
   await engine.sendFiles(files, targets);
-  showToast(`Offering ${files.length} file${files.length > 1 ? "s" : ""}`);
+  const n = targets.length;
+  showToast(
+    n > 1
+      ? `Sending ${files.length} file${files.length > 1 ? "s" : ""} to ${n} devices`
+      : `Offering ${files.length} file${files.length > 1 ? "s" : ""}`
+  );
 }
 
 function wireEvents() {
@@ -456,9 +555,6 @@ function wireEvents() {
   on(els.clearHistory, "click", async () => {
     await idb.historyClear();
     await renderHistory();
-  });
-  on(els.target, "change", () => {
-    state.target = els.target.value;
   });
   on(els.pickFiles, "click", () => els.fileInput.click());
   on(els.fileInput, "change", () => {
