@@ -65,6 +65,7 @@ export class Signaling {
       if (this.closed) return;
       try {
         await this.connect();
+        if (this.helloPayload) this.send(this.helloPayload);
         if (this.joinPayload) this.send(this.joinPayload);
       } catch {
         this.scheduleReconnect();
@@ -72,9 +73,16 @@ export class Signaling {
     }, 1200);
   }
 
+  async hello(payload) {
+    this.helloPayload = { type: "hello", ...payload };
+    await this.connect();
+    this.send(this.helloPayload);
+  }
+
   async join(payload) {
     this.joinPayload = { type: "join", ...payload };
     await this.connect();
+    if (this.helloPayload) this.send(this.helloPayload);
     this.send(this.joinPayload);
   }
 
@@ -121,10 +129,16 @@ export class Signaling {
     this.heartbeat = null;
   }
 
+  leaveRoom() {
+    this.joinPayload = null;
+    this.send({ type: "leave-room" });
+  }
+
   close() {
     this.closed = true;
     clearTimeout(this.reconnectTimer);
     this.stopHeartbeat();
+    this.helloPayload = null;
     this.joinPayload = null;
     try {
       this.ws?.close();

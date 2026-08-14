@@ -26,12 +26,35 @@
       <button class="text-btn" id="open-history" type="button">History</button>
     </header>
 
+    <div id="inbox" class="inbox">
+      <div id="pair-ask" class="incoming" hidden></div>
+      <div id="incoming" class="incoming" hidden></div>
+      <div id="transfers" class="transfers"></div>
+    </div>
+
     <main id="landing">
-      <section class="hero">
-        <h1>Send files to another device</h1>
-        <p class="lede">Create a room, open it on your phone or laptop, then drop a file.</p>
+      <section class="radar-block">
+        <p class="section-label">Nearby</p>
+        <div class="radar" id="radar">
+          <div class="radar-rings" aria-hidden="true"></div>
+          <div class="radar-you">
+            <div class="avatar you">You</div>
+          </div>
+          <div id="nearby-orbit" class="radar-orbit"></div>
+        </div>
+        <p class="radar-hint" id="nearby-hint">Looking for devices on this Wi‑Fi…</p>
+      </section>
+
+      <section class="remembered-block">
+        <p class="section-label">Remembered</p>
+        <div id="remembered" class="remembered"></div>
+        <p class="empty-line" id="remembered-empty">Pin a nearby device to stay connected.</p>
+      </section>
+
+      <section class="room-cta">
+        <p class="section-label">Or use a room</p>
         <div class="cta">
-          <button class="btn primary lg" id="create-room" type="button">New room</button>
+          <button class="btn primary" id="create-room" type="button">New room</button>
           <form id="join-form" class="join">
             <label class="sr-only" for="join-code">Room code</label>
             <input id="join-code" name="code" maxlength="8" autocomplete="off" spellcheck="false" placeholder="Enter code" />
@@ -63,8 +86,6 @@
 
       <div id="ready" class="ready" hidden>
         <div id="devices" class="devices"></div>
-        <div id="incoming" class="incoming" hidden></div>
-        <div id="transfers" class="transfers"></div>
         <div
           id="drop"
           class="drop"
@@ -79,10 +100,11 @@
               <button class="btn primary" id="pick-files" type="button">Choose files</button>
             </div>
           </div>
-          <input id="file-input" type="file" multiple hidden />
         </div>
       </div>
     </section>
+
+    <input id="file-input" type="file" multiple hidden />
 
     <div id="qr-modal" class="modal" hidden>
       <div class="modal-card" role="dialog" aria-labelledby="qr-title">

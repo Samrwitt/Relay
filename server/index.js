@@ -199,8 +199,8 @@ function send(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 
-wss.on("connection", (ws) => {
-  const ctx = { roomId: null, deviceId: null };
+wss.on("connection", (ws, req) => {
+  const ctx = { roomId: null, deviceId: null, ip: clientIp(req), ws };
 
   ws.on("message", (raw, isBinary) => {
     try {
@@ -217,25 +217,133 @@ wss.on("connection", (ws) => {
     }
   });
 
-  ws.on("close", () => leave(ctx));
-  ws.on("error", () => leave(ctx));
+  ws.on("close", () => disconnect(ctx));
+  ws.on("error", () => disconnect(ctx));
 });
 
-function leave(ctx) {
+const devices = new Map();
+
+function clientIp(req) {
+  const xff = req.headers["x-forwarded-for"];
+  if (xff) return String(xff).split(",")[0].trim().replace(/^::ffff:/, "");
+  return String(req.socket.remoteAddress || "").replace(/^::ffff:/, "") || "unknown";
+}
+
+function netKey(ip) {
+  const parts = String(ip).split(".");
+  if (parts.length === 4) return parts.slice(0, 3).join(".");
+  return ip || "unknown";
+}
+
+function presenceView(d) {
+  return {
+    id: d.id,
+    name: d.name,
+    platform: d.platform,
+    publicKey: d.publicKey,
+    online: true,
+  };
+}
+
+function getDevice(id) {
+  return devices.get(id);
+}
+
+function canRoute(fromId, toId) {
+  const a = getDevice(fromId);
+  const b = getDevice(toId);
+  if (!a || !b) return false;
+  if (a.roomId && a.roomId === b.roomId) return true;
+  if (a.paired.has(toId) && b.paired.has(fromId)) return true;
+  if (a.net && a.net === b.net) return true;
+  if (!HOSTED) return true;
+  return false;
+}
+
+function sendDevice(id, msg) {
+  const d = getDevice(id);
+  if (d?.ws.readyState === 1) d.ws.send(JSON.stringify(msg));
+}
+
+function nearbyList(id) {
+  const me = getDevice(id);
+  if (!me) return [];
+  return [...devices.values()]
+    .filter((d) => d.id !== id && (d.net === me.net || !HOSTED))
+    .map(presenceView);
+}
+
+function pairedOnline(id) {
+  const me = getDevice(id);
+  if (!me) return [];
+  return [...me.paired]
+    .map((pid) => getDevice(pid))
+    .filter(Boolean)
+    .map(presenceView);
+}
+
+function pushPresence(id) {
+  const me = getDevice(id);
+  if (!me) return;
+  sendDevice(id, {
+    type: "presence",
+    nearby: nearbyList(id),
+    paired: pairedOnline(id),
+  });
+}
+
+function notifyNet(net, exceptId, msg) {
+  for (const d of devices.values()) {
+    const same = d.net === net || !HOSTED;
+    if (same && d.id !== exceptId && d.ws.readyState === 1) {
+      d.ws.send(JSON.stringify(msg));
+    }
+  }
+}
+
+function disconnect(ctx) {
+  leaveRoom(ctx);
+  if (!ctx.deviceId) return;
+  const d = getDevice(ctx.deviceId);
+  if (d && d.ws === ctx.ws) {
+    const net = d.net;
+    const paired = [...d.paired];
+    devices.delete(ctx.deviceId);
+    notifyNet(net, ctx.deviceId, { type: "nearby-left", id: ctx.deviceId });
+    for (const pid of paired) {
+      sendDevice(pid, { type: "paired-offline", id: ctx.deviceId });
+    }
+  }
+  ctx.deviceId = null;
+}
+
+function leaveRoom(ctx) {
   if (!ctx.roomId || !ctx.deviceId) return;
   const room = getRoom(ctx.roomId);
-  if (!room) return;
-  room.remove(ctx.deviceId);
-  room.broadcast(ctx.deviceId, { type: "peer-left", id: ctx.deviceId });
-  if (room.peers.size === 0) destroyRoom(room.id);
+  const d = getDevice(ctx.deviceId);
+  if (d) d.roomId = null;
+  if (room) {
+    room.remove(ctx.deviceId);
+    room.broadcast(ctx.deviceId, { type: "peer-left", id: ctx.deviceId });
+    if (room.peers.size === 0) destroyRoom(room.id);
+  }
   ctx.roomId = null;
-  ctx.deviceId = null;
 }
 
 function handleText(ws, ctx, msg) {
   switch (msg.type) {
+    case "hello":
+      return onHello(ws, ctx, msg);
     case "join":
       return onJoin(ws, ctx, msg);
+    case "leave-room":
+      return leaveRoom(ctx);
+    case "pair-ask":
+      return onPairAsk(ctx, msg);
+    case "pair-ok":
+      return onPairOk(ctx, msg);
+    case "pair-forget":
+      return onPairForget(ctx, msg);
     case "signal":
       return onSignal(ctx, msg);
     case "control":
@@ -245,6 +353,87 @@ function handleText(ws, ctx, msg) {
     default:
       send(ws, { type: "error", message: "Unknown message" });
   }
+}
+
+function onHello(ws, ctx, msg) {
+  const id = String(msg.deviceId || "").slice(0, 40);
+  const name = String(msg.name || "Device").slice(0, 64);
+  const platform = String(msg.platform || "unknown").slice(0, 64);
+  const publicKey = String(msg.publicKey || "").slice(0, 512);
+  const pairedIds = Array.isArray(msg.pairedIds)
+    ? msg.pairedIds.map((x) => String(x).slice(0, 40)).slice(0, 24)
+    : [];
+  if (!id) {
+    send(ws, { type: "error", message: "Invalid hello" });
+    return;
+  }
+
+  const existing = getDevice(id);
+  if (existing && existing.ws !== ws) {
+    try {
+      existing.ws.close();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const device = {
+    id,
+    name,
+    platform,
+    publicKey,
+    ws,
+    ip: ctx.ip,
+    net: netKey(ctx.ip),
+    roomId: existing?.roomId || ctx.roomId || null,
+    paired: new Set(pairedIds),
+    joinedAt: Date.now(),
+  };
+  devices.set(id, device);
+  ctx.deviceId = id;
+  ctx.ws = ws;
+
+  send(ws, {
+    type: "hello-ok",
+    you: presenceView(device),
+    nearby: nearbyList(id),
+    paired: pairedOnline(id),
+  });
+  notifyNet(device.net, id, { type: "nearby-joined", peer: presenceView(device) });
+  for (const pid of device.paired) {
+    const other = getDevice(pid);
+    if (other?.paired.has(id)) {
+      sendDevice(pid, { type: "paired-online", peer: presenceView(device) });
+    }
+  }
+}
+
+function onPairAsk(ctx, msg) {
+  const to = String(msg.to || "");
+  if (!ctx.deviceId || !canRoute(ctx.deviceId, to)) return;
+  const from = getDevice(ctx.deviceId);
+  sendDevice(to, { type: "pair-ask", from: ctx.deviceId, peer: presenceView(from) });
+}
+
+function onPairOk(ctx, msg) {
+  const to = String(msg.to || "");
+  const a = getDevice(ctx.deviceId);
+  const b = getDevice(to);
+  if (!a || !b) return;
+  a.paired.add(to);
+  b.paired.add(ctx.deviceId);
+  sendDevice(ctx.deviceId, { type: "paired", peer: presenceView(b) });
+  sendDevice(to, { type: "paired", peer: presenceView(a) });
+}
+
+function onPairForget(ctx, msg) {
+  const to = String(msg.to || "");
+  const a = getDevice(ctx.deviceId);
+  if (a) a.paired.delete(to);
+  const b = getDevice(to);
+  if (b) b.paired.delete(ctx.deviceId);
+  sendDevice(to, { type: "unpaired", id: ctx.deviceId });
+  sendDevice(ctx.deviceId, { type: "unpaired", id: to });
 }
 
 function onJoin(ws, ctx, msg) {
@@ -259,7 +448,7 @@ function onJoin(ws, ctx, msg) {
     return;
   }
 
-  if (ctx.roomId) leave(ctx);
+  if (ctx.roomId) leaveRoom(ctx);
 
   let room = getRoom(roomId);
   if (!room) {
@@ -291,6 +480,22 @@ function onJoin(ws, ctx, msg) {
   room.add(peer);
   ctx.roomId = room.id;
   ctx.deviceId = id;
+  const live = getDevice(id);
+  if (live) live.roomId = room.id;
+  else {
+    devices.set(id, {
+      id,
+      name,
+      platform,
+      publicKey,
+      ws,
+      ip: ctx.ip,
+      net: netKey(ctx.ip),
+      roomId: room.id,
+      paired: new Set(),
+      joinedAt: Date.now(),
+    });
+  }
 
   send(ws, {
     type: "joined",
@@ -302,11 +507,9 @@ function onJoin(ws, ctx, msg) {
 }
 
 function onSignal(ctx, msg) {
-  const room = ctx.roomId && getRoom(ctx.roomId);
-  if (!room || !ctx.deviceId) return;
   const to = String(msg.to || "");
-  if (!room.peers.has(to)) return;
-  room.send(to, {
+  if (!ctx.deviceId || !canRoute(ctx.deviceId, to)) return;
+  sendDevice(to, {
     type: "signal",
     from: ctx.deviceId,
     data: msg.data,
@@ -314,10 +517,11 @@ function onSignal(ctx, msg) {
 }
 
 function onControl(ctx, msg) {
-  const room = ctx.roomId && getRoom(ctx.roomId);
-  if (!room || !ctx.deviceId) return;
   const to = String(msg.to || "");
+  if (!ctx.deviceId) return;
   if (to === "*") {
+    const room = ctx.roomId && getRoom(ctx.roomId);
+    if (!room) return;
     room.broadcast(ctx.deviceId, {
       type: "control",
       from: ctx.deviceId,
@@ -325,8 +529,8 @@ function onControl(ctx, msg) {
     });
     return;
   }
-  if (!room.peers.has(to)) return;
-  room.send(to, {
+  if (!canRoute(ctx.deviceId, to)) return;
+  sendDevice(to, {
     type: "control",
     from: ctx.deviceId,
     data: msg.data,
@@ -336,8 +540,7 @@ function onControl(ctx, msg) {
 function handleBinary(ws, ctx, raw) {
   const buf = raw instanceof ArrayBuffer ? Buffer.from(raw) : raw;
   if (buf.length > MAX_BINARY || buf.length < 8) return;
-  const room = ctx.roomId && getRoom(ctx.roomId);
-  if (!room || !ctx.deviceId) return;
+  if (!ctx.deviceId) return;
 
   const headerLen = buf.readUInt32BE(0);
   if (headerLen <= 0 || headerLen > 4096 || 4 + headerLen > buf.length) return;
@@ -350,11 +553,12 @@ function handleBinary(ws, ctx, raw) {
   }
 
   const to = String(header.to || "");
-  if (!room.peers.has(to)) return;
+  if (!canRoute(ctx.deviceId, to)) return;
 
   header.from = ctx.deviceId;
   const packed = packBinary(header, buf.subarray(4 + headerLen));
-  room.sendBinary(to, packed);
+  const dest = getDevice(to);
+  if (dest?.ws.readyState === 1) dest.ws.send(packed);
 }
 
 function packBinary(header, payload) {

@@ -19,6 +19,7 @@ import { Signaling } from "./js/signaling.js";
 import { Mesh } from "./js/webrtc.js";
 import { TransferEngine } from "./js/transfer.js";
 import * as idb from "./js/idb.js";
+import * as pairs from "./js/pairs.js";
 
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -28,6 +29,10 @@ const state = {
   you: null,
   peers: [],
   target: "*",
+  nearby: [],
+  pairedLive: new Set(),
+  sendTo: null,
+  pairAsks: [],
   history: [],
   toast: null,
 };
@@ -67,6 +72,11 @@ const els = {
   closeHistory: $("#close-history"),
   clearHistory: $("#clear-history"),
   incoming: $("#incoming"),
+  pairAsk: $("#pair-ask"),
+  nearbyOrbit: $("#nearby-orbit"),
+  nearbyHint: $("#nearby-hint"),
+  remembered: $("#remembered"),
+  rememberedEmpty: $("#remembered-empty"),
   toast: $("#toast"),
   statusDot: $("#status-dot"),
   peerCount: $("#peer-count"),
@@ -174,6 +184,317 @@ function renderPeers() {
 
 function shortName(name) {
   return String(name || "Device").replace(/\s*·\s*.+$/, "");
+}
+
+function ensureSession() {
+  if (signaling) return;
+  signaling = new Signaling();
+  mesh = new Mesh({
+    signaling,
+    localId: me.id,
+    onPacket: (from, header, payload, mode) => engine?.onPacket(from, header, payload, mode),
+    onMode: () => {
+      renderPeers();
+      renderHome();
+    },
+  });
+  engine = new TransferEngine({
+    mesh,
+    signaling,
+    keys,
+    localId: me.id,
+    onChange: () => {
+      renderTransfers();
+      pingIncomingNotice();
+    },
+  });
+  engine.setPeer({ id: me.id, name: me.name, platform: me.platform, publicKey: exportPublicKey(keys) });
+
+  signaling.on("hello-ok", (msg) => {
+    state.you = msg.you;
+    mergeNearby(msg.nearby || []);
+    state.pairedLive = new Set();
+    for (const p of msg.paired || []) {
+      engine.setPeer(p);
+      state.pairedLive.add(p.id);
+    }
+    els.statusDot.classList.add("on");
+    renderHome();
+  });
+  signaling.on("nearby-joined", (msg) => {
+    if (!msg.peer || msg.peer.id === me.id) return;
+    mergeNearby([msg.peer]);
+    engine.setPeer(msg.peer);
+    renderHome();
+  });
+  signaling.on("nearby-left", (msg) => {
+    state.nearby = state.nearby.filter((p) => p.id !== msg.id);
+    if (state.sendTo === msg.id) state.sendTo = null;
+    renderHome();
+  });
+  signaling.on("presence", (msg) => {
+    mergeNearby(msg.nearby || []);
+    for (const p of msg.paired || []) {
+      engine.setPeer(p);
+      state.pairedLive.add(p.id);
+    }
+    renderHome();
+  });
+  signaling.on("pair-ask", (msg) => {
+    if (!msg.peer || state.pairAsks.some((p) => p.id === msg.peer.id)) return;
+    engine.setPeer(msg.peer);
+    state.pairAsks.push(msg.peer);
+    renderPairAsks();
+    desktopNotice("Stay connected?", `${shortName(msg.peer.name)} wants to remember this device`);
+  });
+  signaling.on("paired", (msg) => {
+    if (!msg.peer) return;
+    engine.setPeer(msg.peer);
+    pairs.upsertPair(msg.peer);
+    state.pairedLive.add(msg.peer.id);
+    state.pairAsks = state.pairAsks.filter((p) => p.id !== msg.peer.id);
+    renderPairAsks();
+    renderHome();
+    showToast(`Remembered ${shortName(msg.peer.name)}`);
+  });
+  signaling.on("unpaired", (msg) => {
+    pairs.removePair(msg.id);
+    renderHome();
+  });
+  signaling.on("paired-online", (msg) => {
+    if (msg.peer) {
+      engine.setPeer(msg.peer);
+      pairs.upsertPair(msg.peer);
+      state.pairedLive.add(msg.peer.id);
+    }
+    renderHome();
+  });
+  signaling.on("paired-offline", (msg) => {
+    state.pairedLive.delete(msg.id);
+    renderHome();
+  });
+  signaling.on("joined", (msg) => {
+    state.you = msg.you;
+    state.peers = msg.peers || [];
+    for (const p of state.peers) {
+      engine.setPeer(p);
+      mesh.ensure(p.id);
+    }
+    els.statusDot.classList.add("on");
+    renderPeers();
+    showToast(`Joined room ${msg.roomId}`);
+  });
+  signaling.on("peer-joined", (msg) => {
+    const peer = msg.peer;
+    if (!peer || peer.id === me.id) return;
+    state.peers = state.peers.filter((p) => p.id !== peer.id).concat(peer);
+    engine.setPeer(peer);
+    mesh.ensure(peer.id);
+    renderPeers();
+    showToast(`${shortName(peer.name)} joined`);
+  });
+  signaling.on("peer-left", (msg) => {
+    state.peers = state.peers.filter((p) => p.id !== msg.id);
+    renderPeers();
+  });
+  signaling.on("error", (msg) => showToast(msg.message || "Connection error"));
+  signaling.on("close", () => els.statusDot.classList.remove("on"));
+  signaling.on("open", () => els.statusDot.classList.add("on"));
+}
+
+function mergeNearby(list) {
+  const byId = new Map(state.nearby.map((p) => [p.id, p]));
+  for (const p of list) {
+    if (p.id !== me.id) {
+      byId.set(p.id, p);
+      engine?.setPeer(p);
+    }
+  }
+  state.nearby = [...byId.values()];
+}
+
+function helloPayload() {
+  return {
+    deviceId: me.id,
+    name: me.name,
+    platform: me.platform,
+    publicKey: exportPublicKey(keys),
+    pairedIds: pairs.pairIds(),
+  };
+}
+
+async function connectPresence() {
+  ensureSession();
+  try {
+    await signaling.hello(helloPayload());
+  } catch {
+    showToast("Could not reach the relay server");
+  }
+}
+
+function askNotify() {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "default") Notification.requestPermission().catch(() => {});
+}
+
+function desktopNotice(title, body) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  if (!document.hidden) return;
+  try {
+    new Notification(title, { body, icon: "/favicon.svg" });
+  } catch {
+    /* ignore */
+  }
+}
+
+const seenIncoming = new Set();
+function pingIncomingNotice() {
+  const fresh = (engine?.list() || []).filter((t) => t.status === "incoming" && !seenIncoming.has(t.id));
+  for (const tx of fresh) {
+    seenIncoming.add(tx.id);
+    desktopNotice(
+      `${shortName(tx.peerName)} wants to send files`,
+      tx.files.map((f) => f.name).join(", ")
+    );
+    showToast(`${shortName(tx.peerName)} wants to send files`);
+  }
+}
+
+function renderHome() {
+  renderNearby();
+  renderRemembered();
+}
+
+function renderNearby() {
+  const nodes = state.nearby.filter((p) => !pairs.isPaired(p.id));
+  const orbit = els.nearbyOrbit;
+  if (!orbit) return;
+  orbit.innerHTML = "";
+  if (els.nearbyHint) {
+    els.nearbyHint.textContent = nodes.length
+      ? "Tap a device to send. Use Remember to stay connected."
+      : "Looking for devices on this Wi‑Fi… Keep Relay open on the other phone.";
+  }
+  nodes.forEach((peer, i) => {
+    const angle = (Math.PI * 2 * i) / Math.max(nodes.length, 1) - Math.PI / 2;
+    const r = 38;
+    const x = 50 + r * Math.cos(angle);
+    const y = 50 + r * Math.sin(angle);
+    const wrap = document.createElement("div");
+    wrap.className = `radar-node ${state.sendTo === peer.id ? "is-selected" : ""}`;
+    wrap.style.left = `${x}%`;
+    wrap.style.top = `${y}%`;
+    wrap.innerHTML = `
+      <button type="button" class="radar-send">
+        <div class="avatar">${initials(peer.name)}</div>
+        <span>${escapeHtml(shortName(peer.name))}</span>
+      </button>
+      <button type="button" class="pin">Remember</button>
+    `;
+    wrap.querySelector(".radar-send").addEventListener("click", () => pickDevice(peer));
+    wrap.querySelector(".pin").addEventListener("click", () => rememberDevice(peer));
+    orbit.appendChild(wrap);
+  });
+}
+
+function renderRemembered() {
+  const saved = pairs.listPairs();
+  if (els.rememberedEmpty) els.rememberedEmpty.hidden = saved.length > 0;
+  if (!els.remembered) return;
+  els.remembered.innerHTML = "";
+  for (const peer of saved) {
+    const live = state.nearby.find((p) => p.id === peer.id);
+    const on = Boolean(live) || state.pairedLive.has(peer.id);
+    const card = document.createElement("article");
+    card.className = `remember-card ${on ? "online" : "offline"} ${state.sendTo === peer.id ? "is-selected" : ""}`;
+    card.innerHTML = `
+      <button type="button" class="remember-main">
+        <div class="avatar">${initials(peer.name)}</div>
+        <div>
+          <div class="device-name">${escapeHtml(shortName(peer.name))}</div>
+          <div class="tx-sub">${on ? "Online — tap to send" : "Offline"}</div>
+        </div>
+      </button>
+      <button type="button" class="text-btn forget">Forget</button>
+    `;
+    card.querySelector(".remember-main").addEventListener("click", () => {
+      if (!on) {
+        showToast("Open Relay on that device first");
+        return;
+      }
+      pickDevice(live || peer);
+    });
+    card.querySelector(".forget").addEventListener("click", () => forgetDevice(peer.id));
+    els.remembered.appendChild(card);
+  }
+}
+
+function pickDevice(peer) {
+  if (!peer?.id) return;
+  engine.setPeer(peer);
+  state.sendTo = peer.id;
+  askNotify();
+  renderHome();
+  els.fileInput.click();
+}
+
+function rememberDevice(peer) {
+  if (!peer?.id) return;
+  engine.setPeer(peer);
+  askNotify();
+  signaling.send({ type: "pair-ask", to: peer.id });
+  showToast(`Asked ${shortName(peer.name)} to stay connected`);
+}
+
+function acceptPair(peer) {
+  signaling.send({ type: "pair-ok", to: peer.id });
+  pairs.upsertPair(peer);
+  state.pairAsks = state.pairAsks.filter((p) => p.id !== peer.id);
+  renderPairAsks();
+  renderHome();
+}
+
+function forgetDevice(id) {
+  pairs.removePair(id);
+  signaling?.send({ type: "pair-forget", to: id });
+  if (state.sendTo === id) state.sendTo = null;
+  renderHome();
+  showToast("Disconnected");
+}
+
+function renderPairAsks() {
+  if (!els.pairAsk) return;
+  if (!state.pairAsks.length) {
+    els.pairAsk.hidden = true;
+    els.pairAsk.innerHTML = "";
+    return;
+  }
+  els.pairAsk.hidden = false;
+  els.pairAsk.innerHTML = state.pairAsks
+    .map(
+      (peer) => `
+      <div class="incoming-card">
+        <div>
+          <strong>${escapeHtml(shortName(peer.name))}</strong> wants to stay connected
+          <div class="incoming-files">You can send files anytime without a room.</div>
+        </div>
+        <div class="incoming-actions">
+          <button class="btn ghost" data-act="pair-no" data-id="${peer.id}">Not now</button>
+          <button class="btn primary" data-act="pair-yes" data-id="${peer.id}">Remember</button>
+        </div>
+      </div>`
+    )
+    .join("");
+  for (const btn of $$("[data-act]", els.pairAsk)) {
+    btn.addEventListener("click", () => {
+      const peer = state.pairAsks.find((p) => p.id === btn.dataset.id);
+      if (btn.dataset.act === "pair-yes" && peer) acceptPair(peer);
+      if (btn.dataset.act === "pair-no") {
+        state.pairAsks = state.pairAsks.filter((p) => p.id !== btn.dataset.id);
+        renderPairAsks();
+      }
+    });
+  }
 }
 
 function escapeHtml(s) {
@@ -341,6 +662,7 @@ function renderIncoming(items) {
           </div>
           <div class="incoming-actions">
             <button class="btn ghost" data-act="reject" data-id="${tx.id}">Decline</button>
+            <button class="btn ghost" data-act="remember-accept" data-id="${tx.id}">Accept & remember</button>
             <button class="btn primary" data-act="accept" data-id="${tx.id}">Accept</button>
           </div>
         </div>`;
@@ -350,6 +672,14 @@ function renderIncoming(items) {
     btn.addEventListener("click", () => {
       if (btn.dataset.act === "accept") engine.accept(btn.dataset.id);
       if (btn.dataset.act === "reject") engine.reject(btn.dataset.id);
+      if (btn.dataset.act === "remember-accept") {
+        const tx = engine.get(btn.dataset.id);
+        if (tx) {
+          const peer = engine.peers.get(tx.from) || { id: tx.from, name: tx.peerName };
+          rememberDevice(peer);
+          engine.accept(btn.dataset.id);
+        }
+      }
     });
   }
 }
@@ -400,67 +730,12 @@ async function enterRoom(roomId) {
   if (entering) return;
   entering = true;
 
-  teardownSession();
+  ensureSession();
   setView("room");
   state.roomId = roomId;
   state.peers = [];
   bindRoomUi(roomId);
   history.replaceState({}, "", `/?room=${roomId}`);
-
-  signaling = new Signaling();
-  mesh = new Mesh({
-    signaling,
-    localId: me.id,
-    onPacket: (from, header, payload, mode) => engine?.onPacket(from, header, payload, mode),
-    onMode: () => renderPeers(),
-  });
-
-  engine = new TransferEngine({
-    mesh,
-    signaling,
-    keys,
-    localId: me.id,
-    onChange: () => renderTransfers(),
-  });
-
-  signaling.on("joined", (msg) => {
-    state.you = msg.you;
-    state.peers = msg.peers || [];
-    for (const p of state.peers) {
-      engine.setPeer(p);
-      mesh.ensure(p.id);
-    }
-    engine.setPeer(state.you);
-    els.statusDot.classList.add("on");
-    renderPeers();
-    showToast(`Joined room ${msg.roomId}`);
-  });
-
-  signaling.on("peer-joined", (msg) => {
-    const peer = msg.peer;
-    if (!peer || peer.id === me.id) return;
-    state.peers = state.peers.filter((p) => p.id !== peer.id).concat(peer);
-    engine.setPeer(peer);
-    mesh.ensure(peer.id);
-    renderPeers();
-    showToast(`${peer.name} joined`);
-  });
-
-  signaling.on("peer-left", (msg) => {
-    state.peers = state.peers.filter((p) => p.id !== msg.id);
-    engine.removePeer(msg.id);
-    mesh.drop(msg.id);
-    renderPeers();
-  });
-
-  signaling.on("error", (msg) => {
-    showToast(msg.message || "Room error");
-  });
-
-  signaling.on("close", () => els.statusDot.classList.remove("on"));
-  signaling.on("open", () => {
-    if (state.view === "room") els.statusDot.classList.add("on");
-  });
 
   try {
     await signaling.join({
@@ -482,29 +757,28 @@ async function enterRoom(roomId) {
   entering = false;
 }
 
-function teardownSession() {
-  signaling?.close();
-  signaling = null;
-  mesh?.close();
-  mesh = null;
-  engine = null;
-  state.you = null;
-  state.peers = [];
-  els.statusDot.classList.remove("on");
-}
-
 function leaveRoom() {
-  teardownSession();
+  signaling?.leaveRoom();
   state.roomId = null;
+  state.peers = [];
   setView("landing");
   history.replaceState({}, "", "/");
   els.joinCode.value = "";
+  renderHome();
 }
 
 async function sendPicked(files) {
   if (!files?.length) return;
+  if (state.view !== "room" && state.sendTo) {
+    const peer = engine.peers.get(state.sendTo) || state.nearby.find((p) => p.id === state.sendTo) || pairs.getPair(state.sendTo);
+    if (peer) engine.setPeer(peer);
+    await engine.sendFiles(files, [state.sendTo]);
+    showToast(`Sent to ${shortName(peer?.name || "device")} — they need to accept`);
+    askNotify();
+    return;
+  }
   if (!state.peers.length) {
-    showToast("Wait for another device to join");
+    showToast("Pick a nearby device, or wait for someone to join a room");
     return;
   }
   const targets = selectedIds();
@@ -577,7 +851,7 @@ function wireEvents() {
     sendPicked(filesFromDataTransfer(e.dataTransfer));
   });
   on(document, "paste", (e) => {
-    if (state.view !== "room") return;
+    if (state.view !== "room" && !state.sendTo) return;
     const files = snapshotFiles(e.clipboardData?.files || []);
     if (files.length) sendPicked(files);
   });
@@ -593,6 +867,8 @@ async function boot() {
   wireEvents();
   await loadShareOrigin();
   await renderHistory();
+  renderHome();
+  await connectPresence();
   const existing = roomFromLocation();
   if (existing) enterRoom(existing);
 }
