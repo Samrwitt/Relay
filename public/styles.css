@@ -1,11 +1,13 @@
 :root {
-  --bg: #f4f7f4;
+  --bg: #f7fbf8;
   --card: #ffffff;
-  --line: #d7e2d8;
+  --line: #d5e6db;
   --text: #14241a;
   --muted: #5d6f62;
-  --green: #1f8a4c;
-  --green-soft: #e6f5eb;
+  --green: #8fd4ae;
+  --green-hover: #7dc89f;
+  --green-ink: #3a7d58;
+  --green-soft: #eef8f2;
   --danger: #c43c3c;
   --radius: 16px;
   --font: "Outfit", system-ui, sans-serif;
@@ -41,13 +43,29 @@ a { color: inherit; }
   width: min(640px, calc(100% - 8px));
   margin: 0 auto;
 }
+.top-actions { display: flex; align-items: center; gap: 8px; }
+.install-hint {
+  width: min(640px, calc(100% - 32px));
+  margin: 12px auto 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--green-soft);
+  color: var(--muted);
+  font-size: 0.88rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.install-hint[hidden] { display: none; }
+.btn.compact { padding: 7px 14px; font-size: 0.88rem; }
 .brand {
   display: flex;
   align-items: center;
   gap: 8px;
   text-decoration: none;
   font-weight: 700;
-  color: var(--green);
+  color: var(--green-ink);
 }
 
 #landing, #room, .inbox {
@@ -77,7 +95,7 @@ a { color: inherit; }
 .radar-rings::after {
   position: absolute;
   inset: 8%;
-  border: 1px solid #cfe0d3;
+  border: 1px solid #d4eadc;
   border-radius: 50%;
   pointer-events: none;
 }
@@ -143,7 +161,7 @@ a { color: inherit; }
   border-radius: 16px;
   padding: 8px 10px;
 }
-.remember-card.online { border-color: #b7dcc4; }
+.remember-card.online { border-color: #c8ebd6; }
 .remember-card.offline { opacity: 0.7; }
 .remember-main {
   flex: 1;
@@ -206,8 +224,8 @@ a { color: inherit; }
   background: transparent;
 }
 .btn.lg { padding: 14px 28px; font-size: 1.05rem; min-width: 180px; }
-.btn.primary { background: var(--green); color: #fff; font-weight: 650; }
-.btn.primary:hover { background: #187542; }
+.btn.primary { background: var(--green); color: #1e3d2c; font-weight: 650; }
+.btn.primary:hover { background: var(--green-hover); }
 .btn.ghost {
   background: var(--card);
   border: 1px solid var(--line);
@@ -291,10 +309,10 @@ button.device { cursor: pointer; }
   place-items: center;
   font-size: 0.72rem;
   font-weight: 700;
-  color: #fff;
+  color: #1e3d2c;
   background: var(--green);
 }
-.device-name span { color: var(--green); font-weight: 600; font-size: 0.75rem; }
+.device-name span { color: var(--green-ink); font-weight: 600; font-size: 0.75rem; }
 
 .drop {
   min-height: 200px;
@@ -347,7 +365,7 @@ button.device { cursor: pointer; }
   padding: 16px;
   border-radius: var(--radius);
   background: var(--green-soft);
-  border: 1px solid #b7dcc4;
+  border: 1px solid #c8ebd6;
 }
 .incoming-files {
   color: var(--muted);
@@ -408,7 +426,7 @@ button.device { cursor: pointer; }
 .tx-name { font-weight: 600; word-break: break-all; }
 .tx-sub, .tx-foot { color: var(--muted); font-size: 0.85rem; }
 .tx-foot { justify-content: flex-end; }
-.tx-pct { font-weight: 650; color: var(--green); }
+.tx-pct { font-weight: 650; color: var(--green-ink); }
 .bar {
   height: 7px;
   background: #e3eee6;
@@ -496,7 +514,7 @@ button.device { cursor: pointer; }
   display: grid;
   place-items: center;
   background: var(--green-soft);
-  color: var(--green);
+  color: var(--green-ink);
 }
 
 .toast {

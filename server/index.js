@@ -123,6 +123,17 @@ const app = express();
 app.disable("x-powered-by");
 if (HOSTED) app.set("trust proxy", 1);
 app.use(express.json({ limit: "32kb" }));
+app.get("/sw.js", (_req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Service-Worker-Allowed", "/");
+  res.type("application/javascript");
+  res.sendFile(path.join(ROOT, "public/sw.js"));
+});
+app.get("/share-target", (_req, res) => res.redirect(303, "/"));
+app.post("/share-target", (req, res) => {
+  req.resume();
+  req.on("end", () => res.redirect(303, "/?share=1"));
+});
 app.use(express.static(path.join(ROOT, "public"), { extensions: ["html"] }));
 app.get("/vendor/nacl-fast.min.js", (_req, res) => {
   res.sendFile(path.join(ROOT, "node_modules/tweetnacl/nacl-fast.min.js"));

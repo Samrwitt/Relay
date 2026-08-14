@@ -43,6 +43,10 @@ let signaling = null;
 let mesh = null;
 let engine = null;
 let entering = false;
+let pendingShare = [];
+let deferredInstall = null;
+
+const SHARE_CACHE = "relay-share";
 
 const els = {
   landing: $("#landing"),
@@ -73,6 +77,7 @@ const els = {
   clearHistory: $("#clear-history"),
   incoming: $("#incoming"),
   pairAsk: $("#pair-ask"),
+  sharePending: $("#share-pending"),
   nearbyOrbit: $("#nearby-orbit"),
   nearbyHint: $("#nearby-hint"),
   remembered: $("#remembered"),
@@ -84,6 +89,10 @@ const els = {
   waiting: $("#waiting"),
   ready: $("#ready"),
   qrInline: $("#qr-inline"),
+  installApp: $("#install-app"),
+  installHint: $("#install-hint"),
+  installHintText: $("#install-hint-text"),
+  installHintHide: $("#install-hint-hide"),
 };
 
 function roomCode() {
@@ -180,6 +189,7 @@ function renderPeers() {
 
   const more = (engine?.list() || []).some((t) => t.status !== "incoming");
   if (els.dropHint && !more) els.dropHint.textContent = recipientLabel();
+  if (pendingShare.length) renderShareBar();
 }
 
 function shortName(name) {
@@ -341,7 +351,7 @@ function desktopNotice(title, body) {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   if (!document.hidden) return;
   try {
-    new Notification(title, { body, icon: "/favicon.svg" });
+                new Notification(title, { body, icon: "/icons/icon-192.png" });
   } catch {
     /* ignore */
   }
@@ -363,6 +373,162 @@ function pingIncomingNotice() {
 function renderHome() {
   renderNearby();
   renderRemembered();
+  renderShareBar();
+}
+
+function renderShareBar() {
+  const el = els.sharePending;
+  if (!el) return;
+  if (!pendingShare.length) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  const names = pendingShare
+    .slice(0, 8)
+    .map((f) => `<li>${escapeHtml(f.name)} · ${formatBytes(f.size)}</li>`)
+    .join("");
+  const extra = pendingShare.length > 8 ? `<li>+${pendingShare.length - 8} more</li>` : "";
+  const roomSend = state.view === "room" && state.peers.length > 0;
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="incoming-card">
+      <div>
+        <strong>Ready to send</strong>
+        <div class="tx-sub">${
+          roomSend
+            ? "Tap a device, or send to everyone in this room"
+            : "Tap a nearby or remembered device"
+        }</div>
+        <ul class="incoming-files">${names}${extra}</ul>
+      </div>
+      <div class="incoming-actions">
+        <button class="btn ghost" data-share="cancel" type="button">Cancel</button>
+        ${roomSend ? `<button class="btn primary" data-share="room" type="button">Send to room</button>` : ""}
+      </div>
+    </div>`;
+  el.querySelector('[data-share="cancel"]')?.addEventListener("click", () => {
+    pendingShare = [];
+    renderHome();
+  });
+  el.querySelector('[data-share="room"]')?.addEventListener("click", () => {
+    const files = pendingShare;
+    pendingShare = [];
+    renderShareBar();
+    sendPicked(files);
+  });
+}
+
+function isStandalone() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+
+function isIos() {
+  const ua = navigator.userAgent || "";
+  return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+async function registerPwa() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    await navigator.serviceWorker.register("/sw.js");
+  } catch {
+    /* ignore */
+  }
+}
+
+function installHintText() {
+  if (isIos()) return "Tap Share, then Add to Home Screen.";
+  if (/Android/i.test(navigator.userAgent || "")) {
+    return "Tap Install, or open the Chrome menu (⋮) and choose Install app.";
+  }
+  return "Tap Install, or use the install icon in the address bar. In the menu: Install Relay / Apps → Install this site as an app.";
+}
+
+function showInstallHint() {
+  if (!els.installHint) return;
+  if (els.installHintText) els.installHintText.textContent = installHintText();
+  els.installHint.hidden = false;
+}
+
+function hideInstallUi() {
+  if (els.installApp) els.installApp.hidden = true;
+  if (els.installHint) els.installHint.hidden = true;
+}
+
+function wireInstall() {
+  const btn = els.installApp;
+  if (isStandalone()) {
+    hideInstallUi();
+    return;
+  }
+  if (btn) btn.hidden = false;
+  on(window, "beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstall = e;
+    if (btn) btn.hidden = false;
+  });
+  on(window, "appinstalled", () => {
+    deferredInstall = null;
+    hideInstallUi();
+    showToast("Relay is installed");
+  });
+  if (btn) {
+    on(btn, "click", async () => {
+      if (deferredInstall) {
+        deferredInstall.prompt();
+        const choice = await deferredInstall.userChoice.catch(() => null);
+        deferredInstall = null;
+        if (choice?.outcome === "accepted") hideInstallUi();
+        else showInstallHint();
+        return;
+      }
+      showInstallHint();
+    });
+  }
+  if (isIos()) showInstallHint();
+  on(els.installHintHide, "click", () => {
+    if (els.installHint) els.installHint.hidden = true;
+  });
+}
+
+async function takeSharedFiles() {
+  const wanted = new URLSearchParams(location.search).has("share");
+  const read = async () => {
+    try {
+      const cache = await caches.open(SHARE_CACHE);
+      const indexRes = await cache.match("/__share/index.json");
+      if (!indexRes) return [];
+      const index = await indexRes.json();
+      const files = [];
+      for (const item of index) {
+        const res = await cache.match(item.path);
+        if (!res) continue;
+        const blob = await res.blob();
+        files.push(new File([blob], item.name, { type: item.type || blob.type || "" }));
+      }
+      await caches.delete(SHARE_CACHE);
+      return files;
+    } catch {
+      return [];
+    }
+  };
+  let files = await read();
+  if (files.length || !wanted) return files;
+  for (let i = 0; i < 8; i++) {
+    await new Promise((r) => setTimeout(r, 60));
+    files = await read();
+    if (files.length) return files;
+  }
+  return [];
+}
+
+function stripShareParam() {
+  const url = new URL(location.href);
+  if (!url.searchParams.has("share")) return;
+  url.searchParams.delete("share");
+  const q = url.searchParams.toString();
+  history.replaceState({}, "", `${url.pathname}${q ? `?${q}` : ""}${url.hash}`);
 }
 
 function renderNearby() {
@@ -372,7 +538,9 @@ function renderNearby() {
   orbit.innerHTML = "";
   if (els.nearbyHint) {
     els.nearbyHint.textContent = nodes.length
-      ? "Tap a device to send. Use Remember to stay connected."
+      ? pendingShare.length
+        ? "Tap a device to send the shared files."
+        : "Tap a device to send. Use Remember to stay connected."
       : "Looking for devices on this Wi‑Fi… Keep Relay open on the other phone.";
   }
   nodes.forEach((peer, i) => {
@@ -435,6 +603,13 @@ function pickDevice(peer) {
   state.sendTo = peer.id;
   askNotify();
   renderHome();
+  if (pendingShare.length) {
+    const files = pendingShare;
+    pendingShare = [];
+    renderShareBar();
+    sendPicked(files);
+    return;
+  }
   els.fileInput.click();
 }
 
@@ -754,6 +929,7 @@ async function enterRoom(roomId) {
 
   renderPeers();
   renderTransfers();
+  renderShareBar();
   entering = false;
 }
 
@@ -865,9 +1041,18 @@ function wireEvents() {
 
 async function boot() {
   wireEvents();
+  wireInstall();
+  await registerPwa();
   await loadShareOrigin();
   await renderHistory();
   renderHome();
+  const shared = await takeSharedFiles();
+  stripShareParam();
+  if (shared.length) {
+    pendingShare = shared;
+    renderShareBar();
+    showToast(`${shared.length} file${shared.length === 1 ? "" : "s"} ready — tap a device`);
+  }
   await connectPresence();
   const existing = roomFromLocation();
   if (existing) enterRoom(existing);
