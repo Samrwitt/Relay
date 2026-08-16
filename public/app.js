@@ -14,6 +14,13 @@ import {
   snapshotFiles,
   filesFromDataTransfer,
 } from "./js/utils.js";
+import {
+  getStoredServerUrl,
+  isNativeApp,
+  needsServerSetup,
+  relayOrigin,
+  setStoredServerUrl,
+} from "./js/config.js";
 import { loadKeyPair, exportPublicKey } from "./js/crypto.js";
 import { Signaling } from "./js/signaling.js";
 import { Mesh } from "./js/webrtc.js";
@@ -93,6 +100,11 @@ const els = {
   installHint: $("#install-hint"),
   installHintText: $("#install-hint-text"),
   installHintHide: $("#install-hint-hide"),
+  openServer: $("#open-server"),
+  serverModal: $("#server-modal"),
+  serverUrl: $("#server-url"),
+  saveServer: $("#save-server"),
+  closeServer: $("#close-server"),
 };
 
 function roomCode() {
@@ -458,15 +470,16 @@ function hideInstallUi() {
 
 function wireInstall() {
   const btn = els.installApp;
-  if (isStandalone()) {
+  if (isNativeApp() || isStandalone()) {
     hideInstallUi();
-    return;
+    if (btn) btn.hidden = true;
+  } else if (btn) {
+    btn.hidden = false;
   }
-  if (btn) btn.hidden = false;
   on(window, "beforeinstallprompt", (e) => {
     e.preventDefault();
     deferredInstall = e;
-    if (btn) btn.hidden = false;
+    if (btn && !isNativeApp()) btn.hidden = false;
   });
   on(window, "appinstalled", () => {
     deferredInstall = null;
@@ -486,10 +499,66 @@ function wireInstall() {
       showInstallHint();
     });
   }
-  if (isIos()) showInstallHint();
+  if (isIos() && !isNativeApp() && !isStandalone()) showInstallHint();
   on(els.installHintHide, "click", () => {
     if (els.installHint) els.installHint.hidden = true;
   });
+}
+
+function openServerModal() {
+  if (!els.serverModal) return;
+  if (els.serverUrl) els.serverUrl.value = getStoredServerUrl() || relayOrigin();
+  els.serverModal.hidden = false;
+  els.serverUrl?.focus();
+}
+
+function closeServerModal() {
+  if (els.serverModal) els.serverModal.hidden = true;
+}
+
+function wireServerSettings() {
+  if (els.openServer) {
+    els.openServer.hidden = !isNativeApp();
+    on(els.openServer, "click", openServerModal);
+  }
+  on(els.closeServer, "click", closeServerModal);
+  on(els.serverModal, "click", (e) => {
+    if (e.target === els.serverModal) closeServerModal();
+  });
+  on(els.saveServer, "click", async () => {
+    const raw = (els.serverUrl?.value || "").trim();
+    if (!raw) {
+      showToast("Enter a server URL");
+      return;
+    }
+    let url;
+    try {
+      url = new URL(raw.includes("://") ? raw : `http://${raw}`);
+    } catch {
+      showToast("That URL looks invalid");
+      return;
+    }
+    if (!/^https?:$/.test(url.protocol)) {
+      showToast("Use http:// or https://");
+      return;
+    }
+    setStoredServerUrl(url.origin);
+    closeServerModal();
+    showToast("Reconnecting…");
+    await loadShareOrigin();
+    try {
+      signaling?.close();
+      signaling = null;
+      mesh = null;
+      engine = null;
+      await connectPresence();
+      showToast("Connected");
+    } catch {
+      showToast("Could not reach that server");
+      openServerModal();
+    }
+  });
+  if (needsServerSetup()) openServerModal();
 }
 
 async function takeSharedFiles() {
@@ -884,7 +953,8 @@ function bindRoomUi(roomId) {
   const url = shareUrl(roomId);
   els.roomCode.textContent = roomId;
   els.shareLink.value = url;
-  const qrSrc = `/api/qr?text=${encodeURIComponent(url)}`;
+  const origin = relayOrigin();
+  const qrSrc = `${origin}/api/qr?text=${encodeURIComponent(url)}`;
   els.qrImg.src = qrSrc;
   els.qrImg.alt = `QR code for room ${roomId}`;
   if (els.qrInline) {
@@ -892,7 +962,13 @@ function bindRoomUi(roomId) {
     els.qrInline.alt = `Scan to join room ${roomId}`;
   }
   if (els.lanHint) {
-    els.lanHint.hidden = !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+    let host = location.hostname;
+    try {
+      host = new URL(origin).hostname;
+    } catch {
+      /* ignore */
+    }
+    els.lanHint.hidden = !/^(localhost|127\.0\.0\.1)$/.test(host) || isNativeApp();
   }
 }
 
@@ -1034,6 +1110,7 @@ function wireEvents() {
   on(document, "keydown", (e) => {
     if (e.key === "Escape") {
       els.qrModal.hidden = true;
+      closeServerModal();
       els.historyPanel.classList.remove("open");
     }
   });
@@ -1042,6 +1119,7 @@ function wireEvents() {
 async function boot() {
   wireEvents();
   wireInstall();
+  wireServerSettings();
   await registerPwa();
   await loadShareOrigin();
   await renderHistory();
@@ -1053,7 +1131,9 @@ async function boot() {
     renderShareBar();
     showToast(`${shared.length} file${shared.length === 1 ? "" : "s"} ready — tap a device`);
   }
-  await connectPresence();
+  if (!needsServerSetup()) {
+    await connectPresence();
+  }
   const existing = roomFromLocation();
   if (existing) enterRoom(existing);
 }

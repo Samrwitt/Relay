@@ -463,6 +463,21 @@ button.device { cursor: pointer; }
   text-align: center;
 }
 .modal-card h2 { margin: 0 0 12px; }
+.modal-copy {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-align: left;
+}
+.modal-card > input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 0.92rem;
+  margin-bottom: 12px;
+}
 .modal-card img {
   width: min(240px, 100%);
   height: auto;

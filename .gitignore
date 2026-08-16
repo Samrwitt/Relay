@@ -6,3 +6,15 @@ node_modules/
 dist/
 .vscode/
 .idea/
+.capacitor/
+*.keystore
+*.jks
+android/.gradle/
+android/app/build/
+android/build/
+android/captures/
+android/local.properties
+android/.idea/
+ios/App/Pods/
+ios/App/App/public/
+

@@ -17,6 +17,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
+    <script src="/native-config.js"></script>
   </head>
   <body>
     <header class="top">
@@ -30,6 +31,7 @@
       </a>
       <div class="top-actions">
         <button class="btn ghost compact" id="install-app" type="button">Install</button>
+        <button class="text-btn" id="open-server" type="button" hidden>Server</button>
         <button class="text-btn" id="open-history" type="button">History</button>
       </div>
     </header>
@@ -128,6 +130,19 @@
           <button class="btn primary" id="copy-link" type="button">Copy link</button>
         </div>
         <button class="btn ghost" id="close-qr" type="button">Close</button>
+      </div>
+    </div>
+
+    <div id="server-modal" class="modal" hidden>
+      <div class="modal-card" role="dialog" aria-labelledby="server-title">
+        <h2 id="server-title">Relay server</h2>
+        <p class="modal-copy">Point this app at your laptop or a hosted Relay URL. On the same Wi‑Fi use the LAN address from the terminal.</p>
+        <label class="sr-only" for="server-url">Server URL</label>
+        <input id="server-url" type="url" autocomplete="off" spellcheck="false" placeholder="http://192.168.1.19:3478" />
+        <div class="link-row">
+          <button class="btn primary" id="save-server" type="button">Save &amp; reconnect</button>
+        </div>
+        <button class="btn ghost" id="close-server" type="button">Close</button>
       </div>
     </div>
 

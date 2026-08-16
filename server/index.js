@@ -22,7 +22,7 @@ const HOSTED = Boolean(
     process.env.RELAY_HTTP === "1" ||
     (process.env.NODE_ENV === "production" && process.env.RELAY_TLS !== "1")
 );
-const SCHEME = "https";
+const SCHEME = HOSTED ? "http" : "https";
 const ROOM_TTL_MS = 1000 * 60 * 60 * 6;
 const MAX_PEERS = 8;
 const MAX_TEXT = 64 * 1024;
@@ -619,10 +619,18 @@ if (HOSTED) {
     server.listen(PORT, HOST, resolve);
   });
   listenPort = PORT;
+  const urls = publicUrls(listenPort);
   const publicUrl =
     process.env.PUBLIC_URL ||
-    (process.env.FLY_APP_NAME ? `https://${process.env.FLY_APP_NAME}.fly.dev` : `https://localhost:${PORT}`);
-  console.log(`\n  RELAY  ·  ${publicUrl}\n`);
+    (process.env.FLY_APP_NAME ? `https://${process.env.FLY_APP_NAME}.fly.dev` : null);
+  console.log(`\n  RELAY  ·  http\n`);
+  if (publicUrl) console.log(`    ${publicUrl}`);
+  for (const url of urls) console.log(`    ${url}`);
+  if (process.env.RELAY_HTTP === "1") {
+    console.log("\n  Android app: set Server to the LAN http:// address above.\n");
+  } else {
+    console.log("");
+  }
 } else {
   const fallbackPorts = [...new Set([PORT, 3443, 8443])];
   for (const port of fallbackPorts) {

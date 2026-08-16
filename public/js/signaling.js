@@ -1,4 +1,5 @@
 import { packMessage, unpackMessage } from "./utils.js";
+import { relayWsUrl } from "./config.js";
 
 export class Signaling {
   constructor() {
@@ -34,8 +35,7 @@ export class Signaling {
       return this.ready;
     }
     this.closed = false;
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${location.host}/ws`;
+    const url = relayWsUrl();
     this.ready = new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";

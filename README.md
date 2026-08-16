@@ -17,6 +17,43 @@ Laptop ↔ phone. Browser ↔ browser. No accounts, no cloud storage.
 
 The signaling/relay server never sees plaintext. It only exchanges SDP/ICE and opaque binary frames.
 
+## Android app wrapper
+
+Relay includes a Capacitor Android shell in `android/`. The UI is the same web app; the phone talks to your Relay server over the network.
+
+### Run the server for the app
+
+Self-signed HTTPS is awkward in Android WebView. For local testing use HTTP:
+
+```bash
+npm run start:native
+```
+
+Note the LAN URL printed in the terminal, e.g. `http://192.168.1.19:3478`.
+
+### Sync & open Android Studio
+
+```bash
+# optional default server baked into the APK
+RELAY_SERVER=http://192.168.1.19:3478 npm run cap:sync
+
+npm run cap:android
+```
+
+In Android Studio: run on a phone/emulator. First launch opens **Server** — paste the LAN URL (or a hosted `https://…` Relay), then tap **Save & reconnect**.
+
+### After web UI changes
+
+```bash
+npm run cap:sync
+```
+
+Then rebuild/run from Android Studio.
+
+### Desktop
+
+Use Chrome/Edge **Install** for a desktop app shell for now. A Tauri/Windows wrapper can come next if you want system share sheet + offline discovery.
+
 ## Deploy
 
 The app listens on HTTP in production (`RELAY_HTTP=1`). Fly, Render, or Railway terminate HTTPS in front.

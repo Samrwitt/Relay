@@ -187,18 +187,27 @@ export async function copyText(text) {
   }
 }
 
+import { isNativeApp, relayOrigin } from "./config.js";
+
 let shareOrigin = location.origin;
 
 export async function loadShareOrigin() {
-  if (!/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
-    shareOrigin = location.origin;
+  const origin = relayOrigin();
+  shareOrigin = origin;
+  let host = "";
+  try {
+    host = new URL(origin).hostname;
+  } catch {
+    return shareOrigin;
+  }
+  if (isNativeApp() || !/^(localhost|127\.0\.0\.1)$/.test(host)) {
     return shareOrigin;
   }
   try {
-    const info = await fetch("/api/info").then((r) => r.json());
+    const info = await fetch(`${origin}/api/info`).then((r) => r.json());
     if (info.suggested) shareOrigin = info.suggested.replace(/\/$/, "");
   } catch {
-    shareOrigin = location.origin;
+    shareOrigin = origin;
   }
   return shareOrigin;
 }
